@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>OrthoMate · WitMotion Goniometer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0a0e14;
+    --surface:  #131820;
+    --card:     #1a2030;
+    --border:   #252d40;
+    --green:    #1a5c2a;
+    --gb:       #2db84a;
+    --gg:       rgba(45,184,74,.15);
+    --orange:   #e8711a;
+    --text:     #dde3ef;
+    --muted:    #5a6478;
+  }
+
+  html, body { height:100%; background:var(--bg); color:var(--text);
+    font-family:'DM Mono',monospace; overflow:hidden; }
+
+  #app { height:100vh; height:100dvh; display:flex; flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    max-width:720px; margin:0 auto; overflow-y:auto; }
+  #btStatus { max-width:55vw; text-align:right; }
+  #app > * { flex-shrink:0; }
+  .dial-svg { overflow:visible; }
+  .bar { padding-bottom:2px; }
+
+  /* ── Header ── */
+  .hdr { padding:14px 20px 10px; display:flex; align-items:center;
+    justify-content:space-between; border-bottom:1px solid var(--border); }
+  .hdr-logo { font-family:'Syne',sans-serif; font-size:15px; font-weight:800; }
+  .hdr-logo span { color:var(--gb); }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--muted);
+    transition:background .3s; }
+  .dot.on  { background:var(--gb);  box-shadow:0 0 8px var(--gb); }
+  .dot.err { background:var(--orange); }
+
+  /* ── Joint + Side selectors ── */
+  .bar { display:flex; gap:8px; padding:12px 16px 0; overflow-x:auto; scrollbar-width:none; }
+  .bar::-webkit-scrollbar { display:none; }
+  .chip { flex-shrink:0; padding:6px 14px; border-radius:20px;
+    border:1px solid var(--border); background:var(--surface);
+    color:var(--muted); font-family:'DM Mono',monospace; font-size:12px;
+    cursor:pointer; transition:all .15s; white-space:nowrap; }
+  .chip.active { background:var(--green); border-color:var(--gb); color:#fff;
+    box-shadow:0 0 12px var(--gg); }
+
+  /* ── Live angle display ── */
+  .dial-area { flex:1; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:10px; padding:16px; }
+
+  .dial-wrap { position:relative; width:min(70vw,45vh,460px); height:min(70vw,45vh,460px); }
+  .dial-svg  { width:100%; height:100%; }
+  .readout   { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    text-align:center; pointer-events:none; }
+  .angle-val { font-family:'Syne',sans-serif; font-size:clamp(48px,13vw,68px);
+    font-weight:800; color:#fff; line-height:1;
+    text-shadow:0 0 28px rgba(45,184,74,.4); }
+  .angle-unit { font-size:16px; color:var(--gb); }
+
+  .axis-label { font-size:11px; color:var(--muted); letter-spacing:2px;
+    text-transform:uppercase; margin-top:6px; }
+
+  /* raw 3-axis strip */
+  .axis-strip { display:flex; gap:12px; padding:0 20px; }
+  .axis-box { flex:1; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:10px 8px; text-align:center; }
+  .axis-box .lbl { font-size:10px; color:var(--muted); letter-spacing:1px; }
+  .axis-box .val { font-size:20px; font-weight:700; color:#fff; margin-top:4px; font-family:'Syne',sans-serif; }
+
+  /* ── Controls ── */
+  .controls { padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+  .btn-connect { width:100%; padding:16px; border-radius:14px; border:none;
+    background:var(--green); color:#fff; font-family:'Syne',sans-serif;
+    font-size:17px; font-weight:800; cursor:pointer; transition:all .1s;
+    box-shadow:0 4px 20px var(--gg); }
+  .btn-connect:active { transform:scale(.97); }
+  .btn-connect.connected { background:#1a3a5c; color:var(--muted); }
+
+  .btn-row { display:flex; gap:10px; }
+  .btn-freeze { flex:1; padding:12px; border-radius:12px; border:none;
+    background:var(--surface); color:var(--text); font-family:'DM Mono',monospace;
+    font-size:13px; cursor:pointer; border:1px solid var(--border); transition:all .15s; }
+  .btn-freeze.frozen { background:var(--orange); color:#fff; border-color:var(--orange); }
+  .btn-send { flex:1; padding:12px; border-radius:12px;
+    border:1px solid var(--gb); background:transparent;
+    color:var(--gb); font-family:'DM Mono',monospace; font-size:13px;
+    cursor:pointer; transition:all .15s; }
+  .btn-send:disabled { opacity:.3; cursor:not-allowed; }
+  .btn-send:not(:disabled):active { background:var(--gg); }
+
+  /* ── History chips ── */
+  .history { padding:0 16px 14px; display:flex; gap:8px; flex-wrap:wrap; }
+  .hist { font-size:11px; padding:4px 10px; border-radius:20px;
+    background:var(--card); border:1px solid var(--border); color:var(--muted); }
+  .hist.new { border-color:var(--gb); color:var(--gb); }
+
+  /* ── WS config ── */
+  .ws-row { display:flex; gap:8px; padding:8px 16px 0; align-items:center; }
+  .ws-inp { flex:1; background:var(--surface); border:1px solid var(--border);
+    color:var(--text); border-radius:8px; padding:7px 12px;
+    font-family:'DM Mono',monospace; font-size:11px; }
+  .ws-btn { padding:7px 12px; border-radius:8px; border:1px solid var(--border);
+    background:var(--card); color:var(--text); font-family:'DM Mono',monospace;
+    font-size:11px; cursor:pointer; white-space:nowrap; }
+
+  /* ── Axis selector ── */
+  .axis-sel { display:flex; gap:6px; padding:8px 16px 0; }
+  .axis-sel button { flex:1; padding:6px; border-radius:8px;
+    border:1px solid var(--border); background:var(--surface);
+    color:var(--muted); font-family:'DM Mono',monospace; font-size:12px; cursor:pointer; }
+  .axis-sel button.active { border-color:var(--gb); color:var(--gb); background:var(--gg); }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <div class="hdr">
+    <div class="hdr-logo">Ortho<span>Mate</span> · WitMotion</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span style="font-size:10px;color:var(--muted)" id="btStatus">Nicht verbunden</span>
+      <div class="dot" id="btDot"></div>
+    </div>
+  </div>
+
+  <!-- WS relay (optional) -->
+  <div class="ws-row">
+    <input class="ws-inp" id="wsUrl" placeholder="ws://NAS-IP:8765?role=phone  (optional)" />
+    <button class="ws-btn" onclick="connectWS()">WS</button>
+    <div class="dot" id="wsDot" style="flex-shrink:0"></div>
+  </div>
+
+  <!-- Joint selector -->
+  <div class="bar" id="jointBar">
+    <button class="chip active" data-joint="OSG"       onclick="sel(this,'joint')">OSG</button>
+    <button class="chip"        data-joint="Knie"      onclick="sel(this,'joint')">Knie</button>
+    <button class="chip"        data-joint="USG"       onclick="sel(this,'joint')">USG</button>
+    <button class="chip"        data-joint="Hüfte"     onclick="sel(this,'joint')">Hüfte</button>
+  </div>
+
+  <!-- Side selector -->
+  <div class="bar" id="sideBar">
+    <button class="chip active" data-side="links"   onclick="sel(this,'side')">Links</button>
+    <button class="chip"        data-side="rechts"  onclick="sel(this,'side')">Rechts</button>
+  </div>
+
+  <!-- Active axis selector -->
+  <div class="axis-sel">
+    <button class="active" id="axX" onclick="setAxis('X')">X-Achse</button>
+    <button             id="axY" onclick="setAxis('Y')">Y-Achse</button>
+    <button             id="axZ" onclick="setAxis('Z')">Z-Achse</button>
+  </div>
+
+  <!-- Dial -->
+  <div class="dial-area">
+    <div class="dial-wrap">
+      <svg class="dial-svg" viewBox="0 0 220 220">
+        <g id="ticks"></g>
+        <circle cx="110" cy="110" r="90" fill="none" stroke="#252d40" stroke-width="16"/>
+        <path id="arcPath" fill="none" stroke="#2db84a" stroke-width="16" stroke-linecap="round" d="M 110 20"/>
+        <circle id="frozenRing" cx="110" cy="110" r="90" fill="none"
+          stroke="#e8711a" stroke-width="3" opacity="0" stroke-dasharray="8 8"/>
+        <line id="arm" x1="110" y1="110" x2="110" y2="20"
+          stroke="#e8711a" stroke-width="3" stroke-linecap="round"/>
+        <circle cx="110" cy="110" r="6" fill="white"/>
+      </svg>
+      <div class="readout">
+        <div class="angle-val" id="mainAngle">–</div>
+        <div class="angle-unit">°</div>
+      </div>
+    </div>
+    <div class="axis-label" id="axisLabel">OSG · Links · X-Achse</div>
+
+    <!-- Raw 3-axis -->
+    <div class="axis-strip">
+      <div class="axis-box"><div class="lbl">X °</div><div class="val" id="rawX">–</div></div>
+      <div class="axis-box"><div class="lbl">Y °</div><div class="val" id="rawY">–</div></div>
+      <div class="axis-box"><div class="lbl">Z °</div><div class="val" id="rawZ">–</div></div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="btn-connect" id="btnConnect" onclick="connectBLE()">
+      🔵 WitMotion verbinden
+    </button>
+    <div class="btn-row">
+      <button class="btn-freeze" id="btnFreeze" onclick="toggleFreeze()">⏸ Einfrieren</button>
+      <button class="btn-send"   id="btnSend"   onclick="sendValue()" disabled>→ Senden</button>
+    </div>
+  </div>
+
+  <!-- History -->
+  <div class="history" id="history"></div>
+
+  <!-- Diagnose -->
+  <details id="diag" style="margin:0 16px 16px;font-size:11px;color:var(--muted)" open>
+    <summary style="cursor:pointer;padding:6px 0">Diagnose</summary>
+    <pre id="diagLog" style="white-space:pre-wrap;word-break:break-all;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px;max-height:200px;overflow:auto;margin-top:6px"></pre>
+  </details>
+</div>
+
+<script src="gonio-ble.js?v=2"></script>
+<script>
+// ── State ───────────────────────────────────────────────────────────────────
+let angles = { X: 0, Y: 0, Z: 0 };
+let activeAxis = 'X';
+let frozen = false;
+let frozenAngle = 0;
+let joint = 'OSG';
+let side  = 'links';
+let ws = null;
+let wsOk = false;
+let sendEnabled = false;
+
+// ── BLE (über gonio-ble.js: iOS-App nativ ODER Web Bluetooth) ──────────────
+GonioBLE.onAngles = (a) => { angles = a; updateUI(); };
+GonioBLE.onLog = (m) => {
+  const el = document.getElementById('diagLog');
+  const t = new Date().toLocaleTimeString('de-DE');
+  el.textContent += t + '  ' + m + '\n';
+  el.scrollTop = el.scrollHeight;
+};
+GonioBLE.onLog('Plattform: ' + GonioBLE.platform() + ' · ' + (window.self !== window.top ? 'im iframe' : 'eigenes Fenster'));
+if (window.self !== window.top && GonioBLE.platform() === 'web') GonioBLE.onLog('ACHTUNG: Seite läuft eingebettet (iframe). Bluefy liefert das gewählte Gerät dann nicht zurück. Seite direkt (nicht eingebettet) öffnen.');
+GonioBLE.onStatus = (state, text) => {
+  setDot('btDot', state === 'on' ? 'on' : state === 'err' ? 'err' : '');
+  document.getElementById('btStatus').textContent = text;
+  const btn = document.getElementById('btnConnect');
+  const on = state === 'on';
+  btn.classList.toggle('connected', on);
+  btn.textContent = on ? '✓ ' + text + ' (trennen)' : '🔵 WitMotion verbinden';
+  sendEnabled = on;
+  document.getElementById('btnSend').disabled = !on;
+};
+
+async function connectBLE() {
+  if (GonioBLE.connected) return GonioBLE.disconnect();
+  try { await GonioBLE.connect(); } catch (e) { console.error(e); GonioBLE.onLog('Abbruch: ' + (e && e.message || e)); }
+}
+
+// Hinweis direkt beim Laden, wenn kein Bluetooth verfügbar ist
+if (GonioBLE.platform() === 'none') {
+  document.getElementById('btStatus').textContent = GonioBLE.noBleHint();
+  setDot('btDot', 'err');
+}
+
+// ── UI update ────────────────────────────────────────────────────────────────
+function updateUI() {
+  document.getElementById('rawX').textContent = angles.X.toFixed(1);
+  document.getElementById('rawY').textContent = angles.Y.toFixed(1);
+  document.getElementById('rawZ').textContent = angles.Z.toFixed(1);
+
+  if (!frozen) {
+    const v = Math.abs(angles[activeAxis]);
+    updateDial(v);
+    document.getElementById('mainAngle').textContent = v.toFixed(1);
+  }
+}
+
+function updateDial(deg) {
+  deg = Math.min(180, Math.max(0, deg));
+  const cx = 110, cy = 110, r = 90;
+  const rad = ((deg - 90) * Math.PI) / 180;
+  const ax = cx + r * Math.cos(rad);
+  const ay = cy + r * Math.sin(rad);
+  const large = deg > 180 ? 1 : 0;
+  document.getElementById('arcPath').setAttribute('d',
+    `M ${cx} ${cy - r} A ${r} ${r} 0 ${large} 1 ${ax} ${ay}`);
+  document.getElementById('arm').setAttribute('x2', ax);
+  document.getElementById('arm').setAttribute('y2', ay);
+}
+
+// ── Tick marks ───────────────────────────────────────────────────────────────
+(function drawTicks() {
+  const g = document.getElementById('ticks');
+  const cx = 110, cy = 110, r = 90;
+  for (let d = 0; d <= 180; d += 10) {
+    const rad = ((d - 90) * Math.PI) / 180;
+    const inner = d % 30 === 0 ? r - 12 : r - 7;
+    const x1 = cx + inner * Math.cos(rad), y1 = cy + inner * Math.sin(rad);
+    const x2 = cx + (r + 8) * Math.cos(rad), y2 = cy + (r + 8) * Math.sin(rad);
+    const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    l.setAttribute('x1',x1); l.setAttribute('y1',y1);
+    l.setAttribute('x2',x2); l.setAttribute('y2',y2);
+    l.setAttribute('stroke','#252d40');
+    l.setAttribute('stroke-width', d % 30 === 0 ? '2' : '1');
+    g.appendChild(l);
+    if (d % 30 === 0) {
+      const tx = cx + (r + 18) * Math.cos(rad), ty = cy + (r + 18) * Math.sin(rad);
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x',tx); t.setAttribute('y',ty);
+      t.setAttribute('text-anchor','middle'); t.setAttribute('dominant-baseline','middle');
+      t.setAttribute('fill','#5a6478'); t.setAttribute('font-size','9');
+      t.setAttribute('font-family','DM Mono,monospace'); t.textContent = d;
+      g.appendChild(t);
+    }
+  }
+})();
+
+// ── Freeze / Send ────────────────────────────────────────────────────────────
+function toggleFreeze() {
+  frozen = !frozen;
+  frozenAngle = Math.abs(angles[activeAxis]);
+  const btn = document.getElementById('btnFreeze');
+  const ring = document.getElementById('frozenRing');
+  if (frozen) {
+    btn.textContent = '▶ Weitermessen';
+    btn.classList.add('frozen');
+    ring.setAttribute('opacity', '0.6');
+    updateDial(frozenAngle);
+    document.getElementById('mainAngle').textContent = frozenAngle.toFixed(1);
+  } else {
+    btn.textContent = '⏸ Einfrieren';
+    btn.classList.remove('frozen');
+    ring.setAttribute('opacity', '0');
+  }
+}
+
+function sendValue() {
+  const angle = frozen ? frozenAngle : Math.abs(angles[activeAxis]);
+  const payload = { type:'angle', joint, side, axis:activeAxis, angle, ts:Date.now() };
+
+  if (ws && wsOk) ws.send(JSON.stringify(payload));
+
+  // Also dispatch custom event for same-page WerkstattApp integration
+  window.dispatchEvent(new CustomEvent('gonioAngle', { detail: payload }));
+
+  addHistory(joint, side, angle);
+  console.log('[OrthoMate Gonio]', payload);
+}
+
+function addHistory(j, s, a) {
+  const div = document.getElementById('history');
+  const c = document.createElement('div');
+  c.className = 'hist new';
+  c.textContent = `${j} ${s[0].toUpperCase()} ${a.toFixed(1)}°`;
+  div.insertBefore(c, div.firstChild);
+  setTimeout(() => c.classList.remove('new'), 2000);
+  while (div.children.length > 8) div.removeChild(div.lastChild);
+}
+
+// ── Selectors ────────────────────────────────────────────────────────────────
+function sel(btn, type) {
+  const bar = type === 'joint' ? 'jointBar' : 'sideBar';
+  document.querySelectorAll(`#${bar} .chip`).forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (type === 'joint') joint = btn.dataset.joint;
+  else side = btn.dataset.side;
+  updateLabel();
+}
+
+function setAxis(ax) {
+  activeAxis = ax;
+  ['X','Y','Z'].forEach(a => {
+    document.getElementById('ax' + a).classList.toggle('active', a === ax);
+  });
+  updateLabel();
+}
+
+function updateLabel() {
+  document.getElementById('axisLabel').textContent = `${joint} · ${side} · ${activeAxis}-Achse`;
+}
+
+// ── WS relay ─────────────────────────────────────────────────────────────────
+function connectWS() {
+  const url = document.getElementById('wsUrl').value.trim();
+  if (!url) return;
+  localStorage.setItem('gonioWsUrl', url);
+  if (ws) ws.close();
+  ws = new WebSocket(url);
+  ws.onopen  = () => { wsOk = true;  setDot('wsDot','on'); };
+  ws.onclose = () => { wsOk = false; setDot('wsDot',''); };
+  ws.onerror = () => setDot('wsDot','err');
+}
+
+function setDot(id, state) {
+  const d = document.getElementById(id);
+  d.className = 'dot' + (state ? ' ' + state : '');
+}
+
+// Restore WS URL
+const saved = localStorage.getItem('gonioWsUrl');
+if (saved) document.getElementById('wsUrl').value = saved;
+
+// ── iframe / embed API ───────────────────────────────────────────────────────
+// Wenn diese Seite per iframe in die WerkstattApp eingebettet wird:
+// parent.postMessage({ type:'gonioAngle', ... }, '*')
+window.addEventListener('gonioAngle', e => {
+  try { parent.postMessage(e.detail, '*'); } catch(_) {}
+});
+</script>
+</body>
+</html>
