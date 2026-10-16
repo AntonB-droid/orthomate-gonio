@@ -4,400 +4,316 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>OrthoMate · WitMotion Goniometer</title>
+<title>OrthoMate Goniometer</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   :root {
-    --bg:       #0a0e14;
-    --surface:  #131820;
-    --card:     #1a2030;
-    --border:   #252d40;
-    --green:    #1a5c2a;
-    --gb:       #2db84a;
-    --gg:       rgba(45,184,74,.15);
-    --orange:   #e8711a;
-    --text:     #dde3ef;
-    --muted:    #5a6478;
+    --bg:#0a0e14; --surface:#131820; --card:#1a2030; --border:#252d40;
+    --green:#1a5c2a; --gb:#2db84a; --gg:rgba(45,184,74,.15);
+    --orange:#e8711a; --blue:#3b8fe8; --text:#dde3ef; --muted:#6a7488;
   }
-
-  html, body { height:100%; background:var(--bg); color:var(--text);
-    font-family:'DM Mono',monospace; overflow:hidden; }
-
-  #app { height:100vh; height:100dvh; display:flex; flex-direction:column;
-    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-    max-width:720px; margin:0 auto; overflow-y:auto; }
-  #btStatus { max-width:55vw; text-align:right; }
-  #app > * { flex-shrink:0; }
-  .dial-svg { overflow:visible; }
-  .bar { padding-bottom:2px; }
-
-  /* ── Header ── */
-  .hdr { padding:14px 20px 10px; display:flex; align-items:center;
-    justify-content:space-between; border-bottom:1px solid var(--border); }
-  .hdr-logo { font-family:'Syne',sans-serif; font-size:15px; font-weight:800; }
-  .hdr-logo span { color:var(--gb); }
-  .dot { width:10px; height:10px; border-radius:50%; background:var(--muted);
-    transition:background .3s; }
-  .dot.on  { background:var(--gb);  box-shadow:0 0 8px var(--gb); }
+  html, body { height:100%; background:var(--bg); color:var(--text); font-family:'DM Mono',monospace; }
+  #app { min-height:100dvh; display:flex; flex-direction:column; max-width:640px; margin:0 auto;
+    padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 16px); }
+  .hdr { display:flex; align-items:center; justify-content:space-between; padding:14px 0 10px; border-bottom:1px solid var(--border); }
+  .logo { font-family:'Syne',sans-serif; font-weight:800; font-size:16px; }
+  .logo span { color:var(--gb); }
+  .conn { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted); background:none; border:1px solid var(--border);
+    border-radius:20px; padding:6px 12px; font-family:inherit; cursor:pointer; color:var(--text); }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); flex-shrink:0; }
+  .dot.on { background:var(--gb); box-shadow:0 0 8px var(--gb); }
   .dot.err { background:var(--orange); }
 
-  /* ── Joint + Side selectors ── */
-  .bar { display:flex; gap:8px; padding:12px 16px 0; overflow-x:auto; scrollbar-width:none; }
-  .bar::-webkit-scrollbar { display:none; }
-  .chip { flex-shrink:0; padding:6px 14px; border-radius:20px;
-    border:1px solid var(--border); background:var(--surface);
-    color:var(--muted); font-family:'DM Mono',monospace; font-size:12px;
-    cursor:pointer; transition:all .15s; white-space:nowrap; }
-  .chip.active { background:var(--green); border-color:var(--gb); color:#fff;
-    box-shadow:0 0 12px var(--gg); }
+  .steps { display:flex; gap:6px; padding:14px 0 6px; }
+  .steps div { flex:1; height:4px; border-radius:2px; background:var(--border); }
+  .steps div.done { background:var(--green); }
+  .steps div.cur { background:var(--gb); }
 
-  /* ── Live angle display ── */
-  .dial-area { flex:1; display:flex; flex-direction:column;
-    align-items:center; justify-content:center; gap:10px; padding:16px; }
+  .screen { flex:1; display:flex; flex-direction:column; gap:14px; padding-top:10px; }
+  .kicker { font-size:11px; letter-spacing:2px; text-transform:uppercase; color:var(--muted); }
+  h1 { font-family:'Syne',sans-serif; font-size:clamp(24px,6.5vw,32px); font-weight:800; line-height:1.15; }
+  .hint { font-size:13px; line-height:1.6; color:#b6bfd0; background:var(--surface); border:1px solid var(--border);
+    border-radius:12px; padding:12px 14px; }
+  .hint b { color:#fff; font-weight:500; }
 
-  .dial-wrap { position:relative; width:min(70vw,45vh,460px); height:min(70vw,45vh,460px); }
-  .dial-svg  { width:100%; height:100%; }
-  .readout   { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-    text-align:center; pointer-events:none; }
-  .angle-val { font-family:'Syne',sans-serif; font-size:clamp(48px,13vw,68px);
-    font-weight:800; color:#fff; line-height:1;
-    text-shadow:0 0 28px rgba(45,184,74,.4); }
-  .angle-unit { font-size:16px; color:var(--gb); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .opt { padding:16px 12px; border-radius:14px; border:1px solid var(--border); background:var(--surface); color:var(--text);
+    font-family:'Syne',sans-serif; font-weight:700; font-size:17px; cursor:pointer; text-align:left; }
+  .opt small { display:block; font-family:'DM Mono',monospace; font-weight:400; font-size:11px; color:var(--muted); margin-top:4px; }
+  .opt.active { border-color:var(--gb); background:var(--gg); }
 
-  .axis-label { font-size:11px; color:var(--muted); letter-spacing:2px;
-    text-transform:uppercase; margin-top:6px; }
+  .big { flex:1; min-height:220px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; }
+  .val { font-family:'Syne',sans-serif; font-weight:800; font-size:clamp(84px,28vw,140px); line-height:1; color:#fff;
+    font-variant-numeric:tabular-nums; }
+  .val sup { font-size:.35em; color:var(--gb); vertical-align:top; }
+  .sub { font-size:13px; color:var(--muted); text-align:center; }
+  .sub b { color:var(--text); font-weight:500; }
+  .peak { font-size:15px; color:var(--orange); }
 
-  /* raw 3-axis strip */
-  .axis-strip { display:flex; gap:12px; padding:0 20px; }
-  .axis-box { flex:1; background:var(--surface); border:1px solid var(--border);
-    border-radius:10px; padding:10px 8px; text-align:center; }
-  .axis-box .lbl { font-size:10px; color:var(--muted); letter-spacing:1px; }
-  .axis-box .val { font-size:20px; font-weight:700; color:#fff; margin-top:4px; font-family:'Syne',sans-serif; }
+  .stab { width:100%; height:8px; border-radius:4px; background:var(--border); overflow:hidden; }
+  .stab div { height:100%; width:0; background:var(--gb); transition:width .15s; }
 
-  /* ── Controls ── */
-  .controls { padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
-  .btn-connect { width:100%; padding:16px; border-radius:14px; border:none;
-    background:var(--green); color:#fff; font-family:'Syne',sans-serif;
-    font-size:17px; font-weight:800; cursor:pointer; transition:all .1s;
-    box-shadow:0 4px 20px var(--gg); }
-  .btn-connect:active { transform:scale(.97); }
-  .btn-connect.connected { background:#1a3a5c; color:var(--muted); }
+  .btn { width:100%; padding:18px; border-radius:16px; border:none; font-family:'Syne',sans-serif; font-weight:800;
+    font-size:18px; cursor:pointer; background:var(--green); color:#fff; box-shadow:0 4px 20px var(--gg); }
+  .btn:active { transform:scale(.98); }
+  .btn:disabled { opacity:.35; box-shadow:none; }
+  .btn.orange { background:var(--orange); box-shadow:0 4px 20px rgba(232,113,26,.25); }
+  .btn.ghost { background:transparent; border:1px solid var(--border); color:var(--text); box-shadow:none; font-size:15px; padding:14px; }
+  .row { display:flex; gap:10px; }
+  .row > * { flex:1; }
 
-  .btn-row { display:flex; gap:10px; }
-  .btn-freeze { flex:1; padding:12px; border-radius:12px; border:none;
-    background:var(--surface); color:var(--text); font-family:'DM Mono',monospace;
-    font-size:13px; cursor:pointer; border:1px solid var(--border); transition:all .15s; }
-  .btn-freeze.frozen { background:var(--orange); color:#fff; border-color:var(--orange); }
-  .btn-send { flex:1; padding:12px; border-radius:12px;
-    border:1px solid var(--gb); background:transparent;
-    color:var(--gb); font-family:'DM Mono',monospace; font-size:13px;
-    cursor:pointer; transition:all .15s; }
-  .btn-send:disabled { opacity:.3; cursor:not-allowed; }
-  .btn-send:not(:disabled):active { background:var(--gg); }
+  .result { text-align:center; padding:18px 10px; background:var(--surface); border:1px solid var(--gb); border-radius:16px; }
+  .nn { font-family:'Syne',sans-serif; font-weight:800; font-size:clamp(44px,13vw,64px); color:#fff; letter-spacing:1px; }
+  .rlist { display:flex; flex-direction:column; gap:6px; }
+  .ritem { display:flex; justify-content:space-between; font-size:13px; padding:10px 12px; background:var(--surface);
+    border:1px solid var(--border); border-radius:10px; }
+  .ritem b { color:#fff; font-weight:500; }
 
-  /* ── History chips ── */
-  .history { padding:0 16px 14px; display:flex; gap:8px; flex-wrap:wrap; }
-  .hist { font-size:11px; padding:4px 10px; border-radius:20px;
-    background:var(--card); border:1px solid var(--border); color:var(--muted); }
-  .hist.new { border-color:var(--gb); color:var(--gb); }
-
-  /* ── WS config ── */
-  .ws-row { display:flex; gap:8px; padding:8px 16px 0; align-items:center; }
-  .ws-inp { flex:1; background:var(--surface); border:1px solid var(--border);
-    color:var(--text); border-radius:8px; padding:7px 12px;
-    font-family:'DM Mono',monospace; font-size:11px; }
-  .ws-btn { padding:7px 12px; border-radius:8px; border:1px solid var(--border);
-    background:var(--card); color:var(--text); font-family:'DM Mono',monospace;
-    font-size:11px; cursor:pointer; white-space:nowrap; }
-
-  /* ── Axis selector ── */
-  .axis-sel { display:flex; gap:6px; padding:8px 16px 0; }
-  .axis-sel button { flex:1; padding:6px; border-radius:8px;
-    border:1px solid var(--border); background:var(--surface);
-    color:var(--muted); font-family:'DM Mono',monospace; font-size:12px; cursor:pointer; }
-  .axis-sel button.active { border-color:var(--gb); color:var(--gb); background:var(--gg); }
+  details.cfg { font-size:11px; color:var(--muted); margin-top:16px; }
+  details.cfg summary { cursor:pointer; padding:6px 0; }
+  .cfg input { width:100%; background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:8px;
+    padding:8px 10px; font-family:inherit; font-size:11px; margin:6px 0; }
+  .cfg pre { white-space:pre-wrap; word-break:break-all; background:var(--surface); border:1px solid var(--border);
+    border-radius:8px; padding:8px; max-height:160px; overflow:auto; }
+  .raw { display:flex; gap:12px; margin:6px 0; }
 </style>
 </head>
 <body>
 <div id="app">
-
-  <!-- Header -->
   <div class="hdr">
-    <div class="hdr-logo">Ortho<span>Mate</span> · WitMotion</div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <span style="font-size:10px;color:var(--muted)" id="btStatus">Nicht verbunden</span>
-      <div class="dot" id="btDot"></div>
-    </div>
+    <div class="logo">Ortho<span>Mate</span> Gonio</div>
+    <button class="conn" id="connBtn" onclick="toggleConnect()"><span id="connTxt">Sensor verbinden</span><span class="dot" id="connDot"></span></button>
   </div>
+  <div class="steps" id="steps"><div></div><div></div><div></div><div></div><div></div></div>
+  <div class="screen" id="screen"></div>
 
-  <!-- WS relay (optional) -->
-  <div class="ws-row">
-    <input class="ws-inp" id="wsUrl" placeholder="ws://NAS-IP:8765?role=phone  (optional)" />
-    <button class="ws-btn" onclick="connectWS()">WS</button>
-    <div class="dot" id="wsDot" style="flex-shrink:0"></div>
-  </div>
-
-  <!-- Joint selector -->
-  <div class="bar" id="jointBar">
-    <button class="chip active" data-joint="OSG"       onclick="sel(this,'joint')">OSG</button>
-    <button class="chip"        data-joint="Knie"      onclick="sel(this,'joint')">Knie</button>
-    <button class="chip"        data-joint="USG"       onclick="sel(this,'joint')">USG</button>
-    <button class="chip"        data-joint="Hüfte"     onclick="sel(this,'joint')">Hüfte</button>
-  </div>
-
-  <!-- Side selector -->
-  <div class="bar" id="sideBar">
-    <button class="chip active" data-side="links"   onclick="sel(this,'side')">Links</button>
-    <button class="chip"        data-side="rechts"  onclick="sel(this,'side')">Rechts</button>
-  </div>
-
-  <!-- Active axis selector -->
-  <div class="axis-sel">
-    <button class="active" id="axX" onclick="setAxis('X')">X-Achse</button>
-    <button             id="axY" onclick="setAxis('Y')">Y-Achse</button>
-    <button             id="axZ" onclick="setAxis('Z')">Z-Achse</button>
-  </div>
-
-  <!-- Dial -->
-  <div class="dial-area">
-    <div class="dial-wrap">
-      <svg class="dial-svg" viewBox="0 0 220 220">
-        <g id="ticks"></g>
-        <circle cx="110" cy="110" r="90" fill="none" stroke="#252d40" stroke-width="16"/>
-        <path id="arcPath" fill="none" stroke="#2db84a" stroke-width="16" stroke-linecap="round" d="M 110 20"/>
-        <circle id="frozenRing" cx="110" cy="110" r="90" fill="none"
-          stroke="#e8711a" stroke-width="3" opacity="0" stroke-dasharray="8 8"/>
-        <line id="arm" x1="110" y1="110" x2="110" y2="20"
-          stroke="#e8711a" stroke-width="3" stroke-linecap="round"/>
-        <circle cx="110" cy="110" r="6" fill="white"/>
-      </svg>
-      <div class="readout">
-        <div class="angle-val" id="mainAngle">–</div>
-        <div class="angle-unit">°</div>
-      </div>
-    </div>
-    <div class="axis-label" id="axisLabel">OSG · Links · X-Achse</div>
-
-    <!-- Raw 3-axis -->
-    <div class="axis-strip">
-      <div class="axis-box"><div class="lbl">X °</div><div class="val" id="rawX">–</div></div>
-      <div class="axis-box"><div class="lbl">Y °</div><div class="val" id="rawY">–</div></div>
-      <div class="axis-box"><div class="lbl">Z °</div><div class="val" id="rawZ">–</div></div>
-    </div>
-  </div>
-
-  <!-- Controls -->
-  <div class="controls">
-    <button class="btn-connect" id="btnConnect" onclick="connectBLE()">
-      🔵 WitMotion verbinden
-    </button>
-    <div class="btn-row">
-      <button class="btn-freeze" id="btnFreeze" onclick="toggleFreeze()">⏸ Einfrieren</button>
-      <button class="btn-send"   id="btnSend"   onclick="sendValue()" disabled>→ Senden</button>
-    </div>
-  </div>
-
-  <!-- History -->
-  <div class="history" id="history"></div>
-
-  <!-- Diagnose -->
-  <details id="diag" style="margin:0 16px 16px;font-size:11px;color:var(--muted)" open>
-    <summary style="cursor:pointer;padding:6px 0">Diagnose</summary>
-    <pre id="diagLog" style="white-space:pre-wrap;word-break:break-all;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px;max-height:200px;overflow:auto;margin-top:6px"></pre>
+  <details class="cfg">
+    <summary>Einstellungen &amp; Diagnose</summary>
+    <div class="raw">Roll <b id="rX">–</b> Pitch <b id="rY">–</b> Yaw <b id="rZ">–</b></div>
+    <input id="wsUrl" placeholder="ws://NAS-IP:8765?role=phone (optional Relay)" onchange="connectWS()">
+    <pre id="log"></pre>
   </details>
 </div>
 
-<script src="gonio-ble.js?v=2"></script>
+<script src="gonio-ble.js?v=3"></script>
 <script>
-// ── State ───────────────────────────────────────────────────────────────────
-let angles = { X: 0, Y: 0, Z: 0 };
-let activeAxis = 'X';
-let frozen = false;
-let frozenAngle = 0;
-let joint = 'OSG';
-let side  = 'links';
-let ws = null;
-let wsOk = false;
-let sendEnabled = false;
-
-// ── BLE (über gonio-ble.js: iOS-App nativ ODER Web Bluetooth) ──────────────
-GonioBLE.onAngles = (a) => { angles = a; updateUI(); };
-GonioBLE.onLog = (m) => {
-  const el = document.getElementById('diagLog');
-  const t = new Date().toLocaleTimeString('de-DE');
-  el.textContent += t + '  ' + m + '\n';
-  el.scrollTop = el.scrollHeight;
+// ── Gelenk-Definitionen (Neutral-Null-Methode) ─────────────────────────────
+const JOINTS = {
+  OSG:   { name:'OSG',  a:'Dorsalextension', b:'Plantarflexion',
+           place:'Sensor flach auf den <b>Fußrücken</b> (Mittelfuß) kleben/clippen. <b>Unterschenkel ruhig halten</b> – nur der Fuß bewegt sich.',
+           neutral:'Fuß im rechten Winkel zum Unterschenkel (Neutral-Null).' },
+  Knie:  { name:'Knie', a:'Extension', b:'Flexion',
+           place:'Sensor <b>lateral am Unterschenkel</b> anlegen. <b>Oberschenkel fixieren</b> – nur der Unterschenkel bewegt sich.',
+           neutral:'Knie gestreckt, Unterschenkel in Verlängerung des Oberschenkels.' },
+  USG:   { name:'USG',  a:'Eversion', b:'Inversion',
+           place:'Sensor <b>hinten auf den Calcaneus</b>. Bauchlage, <b>Unterschenkel ruhig halten</b>.',
+           neutral:'Ferse in Verlängerung der Unterschenkelachse.' },
+  Hüfte: { name:'Hüfte', a:'Extension', b:'Flexion',
+           place:'Sensor <b>lateral am Oberschenkel</b>. <b>Becken fixieren</b>.',
+           neutral:'Oberschenkel in Verlängerung des Rumpfes.' },
 };
-GonioBLE.onLog('Plattform: ' + GonioBLE.platform() + ' · ' + (window.self !== window.top ? 'im iframe' : 'eigenes Fenster'));
-if (window.self !== window.top && GonioBLE.platform() === 'web') GonioBLE.onLog('ACHTUNG: Seite läuft eingebettet (iframe). Bluefy liefert das gewählte Gerät dann nicht zurück. Seite direkt (nicht eingebettet) öffnen.');
+
+// ── Zustand ────────────────────────────────────────────────────────────────
+const S = {
+  step:0, joint:null, side:null,
+  g:null,           // geglätteter Schwerkraft-Vektor (Sensor-KS)
+  ref:null,         // Referenz bei Nullstellung
+  axis:null,        // Drehachse für Richtung A (Vorzeichen)
+  signed:0,         // aktueller Winkel relativ zur Nullstellung (+ = Richtung A)
+  hist:[],          // [t, angle] für Ruhe-Erkennung
+  peak:null,        // Extremwert im aktuellen Schritt
+  A:null, B:null,
+  results:[],
+};
+
+// ── Sensor-Daten → Winkel ──────────────────────────────────────────────────
+// Roll/Pitch aus der Sensorfusion → Schwerkraft-Vektor. Yaw (driftet) wird ignoriert.
+// Winkel = Abstand zwischen aktuellem und Referenz-Vektor → unabhängig davon,
+// wie der Sensor ausgerichtet ist (keine Achsenwahl nötig).
+const ALPHA = 0.3;   // Glättung (0..1, kleiner = ruhiger)
+function onAngles(a) {
+  $('rX').textContent = a.X.toFixed(1); $('rY').textContent = a.Y.toFixed(1); $('rZ').textContent = a.Z.toFixed(1);
+  const r = a.X * Math.PI/180, p = a.Y * Math.PI/180;
+  const v = [-Math.sin(p), Math.sin(r)*Math.cos(p), Math.cos(r)*Math.cos(p)];
+  S.g = S.g ? norm(S.g.map((x,i) => x + ALPHA*(v[i]-x))) : v;
+
+  let ang = 0;
+  if (S.ref) {
+    const c = cross(S.ref, S.g);
+    ang = Math.atan2(len(c), dot(S.ref, S.g)) * 180/Math.PI;
+    if (S.step === 2 && !S.axis && ang > 4) S.axis = norm(c);    // erste deutliche Bewegung = Richtung A
+    if (S.axis) ang *= Math.sign(dot(c, S.axis)) || 1;
+  }
+  S.signed = ang;
+  const now = performance.now();
+  S.hist.push([now, ang]);
+  while (S.hist.length && now - S.hist[0][0] > 1200) S.hist.shift();
+
+  if (S.step === 2 && S.axis) S.peak = S.peak == null ? ang : Math.max(S.peak, ang);
+  if (S.step === 3) S.peak = S.peak == null ? -ang : Math.max(S.peak, -ang);
+  tick();
+}
+function stability() {             // 0..1  (1 = ruhig seit ≥1 s)
+  if (S.hist.length < 3) return 0;
+  const span = S.hist[S.hist.length-1][0] - S.hist[0][0];
+  const vals = S.hist.map(h => h[1]);
+  const range = Math.max(...vals) - Math.min(...vals);
+  return Math.max(0, Math.min(1, span/1000)) * Math.max(0, 1 - range/3);
+}
+const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const len = a => Math.hypot(a[0],a[1],a[2]);
+const norm = a => { const l = len(a) || 1; return a.map(x => x/l); };
+const $ = id => document.getElementById(id);
+const r0 = v => Math.round(v);
+
+// ── Ablauf ─────────────────────────────────────────────────────────────────
+function go(step) {
+  S.step = step; S.peak = null; S.hist = [];
+  if (step <= 1) { S.ref = null; S.axis = null; S.A = null; S.B = null; }
+  render();
+}
+function zero() {
+  if (!S.g) return;
+  S.ref = S.g.slice(); S.axis = null; S.hist = [];
+  log('Nullstellung gesetzt');
+  go(2);
+}
+function hold(which) {
+  const v = r0(S.peak ?? 0);
+  if (which === 'A') { S.A = v; go(3); } else { S.B = v; go(4); }
+}
+function redo(which) { if (which === 'A') { S.axis = null; go(2); } else go(3); }
+
+// Neutral-Null-Notation: A–0–B, bei Defizit wandert die 0 nach außen
+function notation(A, B) {
+  if (A >= 0 && B >= 0) return `${A}-0-${B}`;
+  if (A < 0) return `0-${-A}-${B}`;
+  return `${A}-${-B}-0`;
+}
+
+function accept() {
+  const j = JOINTS[S.joint];
+  const res = { type:'rom', joint:S.joint, side:S.side, motionA:j.a, motionB:j.b, a:S.A, b:S.B,
+                notation:notation(S.A, S.B), ts:Date.now() };
+  S.results = S.results.filter(r => !(r.joint === res.joint && r.side === res.side));
+  S.results.push(res);
+  window.dispatchEvent(new CustomEvent('gonioROM', { detail:res }));
+  try { if (parent !== window) parent.postMessage(res, '*'); } catch(_) {}
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(res));
+  log('Übernommen: ' + res.joint + ' ' + res.side + ' ' + res.notation);
+  return res;
+}
+function nextSide() { accept(); S.side = S.side === 'links' ? 'rechts' : 'links'; go(1); }
+function nextJoint() { accept(); S.joint = null; go(0); }
+
+// ── Darstellung ────────────────────────────────────────────────────────────
+function render() {
+  [...$('steps').children].forEach((d,i) => d.className = i < S.step ? 'done' : i === S.step ? 'cur' : '');
+  const j = S.joint && JOINTS[S.joint];
+  const connected = GonioBLE.connected || SIM;
+  let h = '';
+
+  if (S.step === 0) {
+    h = `<div class="kicker">Schritt 1</div><h1>Gelenk &amp; Seite</h1>
+      <div class="grid">${Object.keys(JOINTS).map(k => `<button class="opt ${S.joint===k?'active':''}" onclick="S.joint='${k}';render()">${k}<small>${JOINTS[k].a} / ${JOINTS[k].b}</small></button>`).join('')}</div>
+      <div class="grid">${['links','rechts'].map(s => `<button class="opt ${S.side===s?'active':''}" onclick="S.side='${s}';render()">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>
+      ${resultsHTML()}
+      <div style="flex:1"></div>
+      ${connected ? '' : '<div class="hint">Zuerst oben rechts den <b>Sensor verbinden</b>.</div>'}
+      <button class="btn" ${S.joint && S.side && connected ? '' : 'disabled'} onclick="go(1)">Weiter →</button>`;
+  }
+  else if (S.step === 1) {
+    h = `<div class="kicker">Schritt 2 · ${j.name} ${S.side}</div><h1>Sensor anlegen &amp; nullen</h1>
+      <div class="hint">${j.place}<br><br>${j.neutral}</div>
+      <div class="big"><div class="sub">Ruhig halten …</div><div class="stab" style="max-width:320px"><div id="stab"></div></div>
+        <div class="sub" id="stabTxt"></div></div>
+      <div class="row"><button class="btn ghost" onclick="go(0)">← Zurück</button>
+      <button class="btn" id="zeroBtn" onclick="zero()">Nullstellung setzen</button></div>`;
+  }
+  else if (S.step === 2 || S.step === 3) {
+    const isA = S.step === 2, m = isA ? j.a : j.b;
+    h = `<div class="kicker">Schritt ${S.step+1} · ${j.name} ${S.side}</div><h1>${m}</h1>
+      <div class="hint">${isA ? `Langsam in <b>${m}</b> bis zur Endstellung bewegen und kurz halten.`
+                             : `Zurück über die Nullstellung in <b>${m}</b> bis zur Endstellung bewegen und kurz halten.`}</div>
+      <div class="big"><div class="val" id="live">0<sup>°</sup></div>
+        <div class="peak" id="peak">Max –</div>
+        <div class="stab" style="max-width:320px"><div id="stab"></div></div>
+        <div class="sub" id="stabTxt"></div></div>
+      <div class="row"><button class="btn ghost" onclick="${isA ? 'go(1)' : "redo('A')"}">${isA ? '↺ Neu nullen' : '← ' + j.a}</button>
+      <button class="btn orange" id="holdBtn" onclick="hold('${isA?'A':'B'}')">Festhalten</button></div>`;
+  }
+  else if (S.step === 4) {
+    const n = notation(S.A, S.B);
+    h = `<div class="kicker">Ergebnis · ${j.name} ${S.side}</div><h1>${j.a} / ${j.b}</h1>
+      <div class="result"><div class="nn">${n}</div><div class="sub">${j.a} <b>${S.A}°</b> · ${j.b} <b>${S.B}°</b></div></div>
+      <div class="row"><button class="btn ghost" onclick="redo('A')">${j.a} neu</button><button class="btn ghost" onclick="redo('B')">${j.b} neu</button></div>
+      <div style="flex:1"></div>
+      <button class="btn" onclick="nextSide()">Übernehmen → ${j.name} ${S.side === 'links' ? 'rechts' : 'links'}</button>
+      <button class="btn ghost" onclick="nextJoint()">Übernehmen → anderes Gelenk</button>`;
+  }
+  $('screen').innerHTML = h;
+  tick();
+}
+function resultsHTML() {
+  if (!S.results.length) return '';
+  return `<div class="kicker" style="margin-top:6px">Gemessen</div><div class="rlist">${S.results.map(r =>
+    `<div class="ritem"><span>${r.joint} ${r.side}</span><b>${r.notation}</b></div>`).join('')}</div>`;
+}
+function tick() {                     // nur Live-Werte aktualisieren
+  const st = stability();
+  if ($('stab')) $('stab').style.width = (st*100) + '%';
+  if ($('stabTxt')) $('stabTxt').textContent = !S.g ? 'Keine Sensordaten' : st > 0.8 ? 'Stabil ✓' : 'Bewegung erkannt';
+  if ($('zeroBtn')) $('zeroBtn').disabled = !S.g;
+  if ($('live')) {
+    const v = S.step === 3 ? -S.signed : S.signed;
+    $('live').innerHTML = r0(S.axis ? v : Math.abs(v)) + '<sup>°</sup>';
+    $('peak').textContent = 'Max ' + (S.peak == null ? '–' : r0(S.peak) + '°');
+    $('holdBtn').disabled = S.peak == null;
+  }
+}
+
+// ── Verbindung ─────────────────────────────────────────────────────────────
+GonioBLE.onAngles = onAngles;
+GonioBLE.onLog = log;
 GonioBLE.onStatus = (state, text) => {
-  setDot('btDot', state === 'on' ? 'on' : state === 'err' ? 'err' : '');
-  document.getElementById('btStatus').textContent = text;
-  const btn = document.getElementById('btnConnect');
-  const on = state === 'on';
-  btn.classList.toggle('connected', on);
-  btn.textContent = on ? '✓ ' + text + ' (trennen)' : '🔵 WitMotion verbinden';
-  sendEnabled = on;
-  document.getElementById('btnSend').disabled = !on;
+  $('connDot').className = 'dot' + (state === 'on' ? ' on' : state === 'err' ? ' err' : '');
+  $('connTxt').textContent = state === 'on' ? text : state === 'idle' ? 'Sensor verbinden' : text;
+  if (state === 'err' && !GonioBLE.connected) S.g = null;
+  render();
 };
-
-async function connectBLE() {
+async function toggleConnect() {
   if (GonioBLE.connected) return GonioBLE.disconnect();
-  try { await GonioBLE.connect(); } catch (e) { console.error(e); GonioBLE.onLog('Abbruch: ' + (e && e.message || e)); }
+  try { await GonioBLE.connect(); } catch (e) { log('Abbruch: ' + (e && e.message || e)); }
 }
+function log(m) { const el = $('log'); el.textContent += new Date().toLocaleTimeString('de-DE') + '  ' + m + '\n'; el.scrollTop = el.scrollHeight; }
 
-// Hinweis direkt beim Laden, wenn kein Bluetooth verfügbar ist
-if (GonioBLE.platform() === 'none') {
-  document.getElementById('btStatus').textContent = GonioBLE.noBleHint();
-  setDot('btDot', 'err');
-}
-
-// ── UI update ────────────────────────────────────────────────────────────────
-function updateUI() {
-  document.getElementById('rawX').textContent = angles.X.toFixed(1);
-  document.getElementById('rawY').textContent = angles.Y.toFixed(1);
-  document.getElementById('rawZ').textContent = angles.Z.toFixed(1);
-
-  if (!frozen) {
-    const v = Math.abs(angles[activeAxis]);
-    updateDial(v);
-    document.getElementById('mainAngle').textContent = v.toFixed(1);
-  }
-}
-
-function updateDial(deg) {
-  deg = Math.min(180, Math.max(0, deg));
-  const cx = 110, cy = 110, r = 90;
-  const rad = ((deg - 90) * Math.PI) / 180;
-  const ax = cx + r * Math.cos(rad);
-  const ay = cy + r * Math.sin(rad);
-  const large = deg > 180 ? 1 : 0;
-  document.getElementById('arcPath').setAttribute('d',
-    `M ${cx} ${cy - r} A ${r} ${r} 0 ${large} 1 ${ax} ${ay}`);
-  document.getElementById('arm').setAttribute('x2', ax);
-  document.getElementById('arm').setAttribute('y2', ay);
-}
-
-// ── Tick marks ───────────────────────────────────────────────────────────────
-(function drawTicks() {
-  const g = document.getElementById('ticks');
-  const cx = 110, cy = 110, r = 90;
-  for (let d = 0; d <= 180; d += 10) {
-    const rad = ((d - 90) * Math.PI) / 180;
-    const inner = d % 30 === 0 ? r - 12 : r - 7;
-    const x1 = cx + inner * Math.cos(rad), y1 = cy + inner * Math.sin(rad);
-    const x2 = cx + (r + 8) * Math.cos(rad), y2 = cy + (r + 8) * Math.sin(rad);
-    const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    l.setAttribute('x1',x1); l.setAttribute('y1',y1);
-    l.setAttribute('x2',x2); l.setAttribute('y2',y2);
-    l.setAttribute('stroke','#252d40');
-    l.setAttribute('stroke-width', d % 30 === 0 ? '2' : '1');
-    g.appendChild(l);
-    if (d % 30 === 0) {
-      const tx = cx + (r + 18) * Math.cos(rad), ty = cy + (r + 18) * Math.sin(rad);
-      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      t.setAttribute('x',tx); t.setAttribute('y',ty);
-      t.setAttribute('text-anchor','middle'); t.setAttribute('dominant-baseline','middle');
-      t.setAttribute('fill','#5a6478'); t.setAttribute('font-size','9');
-      t.setAttribute('font-family','DM Mono,monospace'); t.textContent = d;
-      g.appendChild(t);
-    }
-  }
-})();
-
-// ── Freeze / Send ────────────────────────────────────────────────────────────
-function toggleFreeze() {
-  frozen = !frozen;
-  frozenAngle = Math.abs(angles[activeAxis]);
-  const btn = document.getElementById('btnFreeze');
-  const ring = document.getElementById('frozenRing');
-  if (frozen) {
-    btn.textContent = '▶ Weitermessen';
-    btn.classList.add('frozen');
-    ring.setAttribute('opacity', '0.6');
-    updateDial(frozenAngle);
-    document.getElementById('mainAngle').textContent = frozenAngle.toFixed(1);
-  } else {
-    btn.textContent = '⏸ Einfrieren';
-    btn.classList.remove('frozen');
-    ring.setAttribute('opacity', '0');
-  }
-}
-
-function sendValue() {
-  const angle = frozen ? frozenAngle : Math.abs(angles[activeAxis]);
-  const payload = { type:'angle', joint, side, axis:activeAxis, angle, ts:Date.now() };
-
-  if (ws && wsOk) ws.send(JSON.stringify(payload));
-
-  // Also dispatch custom event for same-page WerkstattApp integration
-  window.dispatchEvent(new CustomEvent('gonioAngle', { detail: payload }));
-
-  addHistory(joint, side, angle);
-  console.log('[OrthoMate Gonio]', payload);
-}
-
-function addHistory(j, s, a) {
-  const div = document.getElementById('history');
-  const c = document.createElement('div');
-  c.className = 'hist new';
-  c.textContent = `${j} ${s[0].toUpperCase()} ${a.toFixed(1)}°`;
-  div.insertBefore(c, div.firstChild);
-  setTimeout(() => c.classList.remove('new'), 2000);
-  while (div.children.length > 8) div.removeChild(div.lastChild);
-}
-
-// ── Selectors ────────────────────────────────────────────────────────────────
-function sel(btn, type) {
-  const bar = type === 'joint' ? 'jointBar' : 'sideBar';
-  document.querySelectorAll(`#${bar} .chip`).forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  if (type === 'joint') joint = btn.dataset.joint;
-  else side = btn.dataset.side;
-  updateLabel();
-}
-
-function setAxis(ax) {
-  activeAxis = ax;
-  ['X','Y','Z'].forEach(a => {
-    document.getElementById('ax' + a).classList.toggle('active', a === ax);
-  });
-  updateLabel();
-}
-
-function updateLabel() {
-  document.getElementById('axisLabel').textContent = `${joint} · ${side} · ${activeAxis}-Achse`;
-}
-
-// ── WS relay ─────────────────────────────────────────────────────────────────
+let ws = null;
 function connectWS() {
-  const url = document.getElementById('wsUrl').value.trim();
-  if (!url) return;
-  localStorage.setItem('gonioWsUrl', url);
-  if (ws) ws.close();
+  const url = $('wsUrl').value.trim();
+  try { localStorage.setItem('gonioWsUrl', url); } catch(_) {}
+  if (ws) ws.close(); if (!url) return;
   ws = new WebSocket(url);
-  ws.onopen  = () => { wsOk = true;  setDot('wsDot','on'); };
-  ws.onclose = () => { wsOk = false; setDot('wsDot',''); };
-  ws.onerror = () => setDot('wsDot','err');
+  ws.onopen = () => log('Relay verbunden'); ws.onclose = () => log('Relay getrennt');
 }
+try { const u = localStorage.getItem('gonioWsUrl'); if (u) { $('wsUrl').value = u; connectWS(); } } catch(_) {}
 
-function setDot(id, state) {
-  const d = document.getElementById(id);
-  d.className = 'dot' + (state ? ' ' + state : '');
+log('Plattform: ' + GonioBLE.platform() + ' · ' + (window.self !== window.top ? 'im iframe' : 'eigenes Fenster'));
+if (GonioBLE.platform() === 'none' && !SIM) { $('connTxt').textContent = 'Kein Bluetooth'; $('connDot').className = 'dot err'; log(GonioBLE.noBleHint()); }
+
+// ── Simulation (?sim=1) zum Testen ohne Sensor ─────────────────────────────
+var SIM = /[?&]sim=1/.test(location.search);
+if (SIM) {
+  $('connTxt').textContent = 'Simulation'; $('connDot').className = 'dot on';
+  window.simTarget = 0;  let cur = 0;
+  setInterval(() => {
+    cur += (simTarget - cur) * 0.15;
+    const noise = () => (Math.random() - .5) * 3;   // ±1.5° Rauschen
+    onAngles({ X: 12 + noise(), Y: -8 + cur + noise(), Z: 40 + noise()*3 });
+  }, 100);
 }
-
-// Restore WS URL
-const saved = localStorage.getItem('gonioWsUrl');
-if (saved) document.getElementById('wsUrl').value = saved;
-
-// ── iframe / embed API ───────────────────────────────────────────────────────
-// Wenn diese Seite per iframe in die WerkstattApp eingebettet wird:
-// parent.postMessage({ type:'gonioAngle', ... }, '*')
-window.addEventListener('gonioAngle', e => {
-  try { parent.postMessage(e.detail, '*'); } catch(_) {}
-});
+render();
 </script>
 </body>
 </html>
