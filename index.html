@@ -112,7 +112,18 @@ const JOINTS = {
   Hüfte: { name:'Hüfte', a:'Extension', b:'Flexion',
            place:'Sensor <b>lateral am Oberschenkel</b>. <b>Becken fixieren</b>.',
            neutral:'Oberschenkel in Verlängerung des Rumpfes.' },
+  OSGK:  { name:'OSG', title:'OSG gestr./gebeugt', sub:'DE/PF Knie gestreckt + gebeugt', a:'Dorsalextension', b:'Plantarflexion', silf:true },
 };
+
+// ── Modus „OSG Knie gestreckt/gebeugt“ (absolut, ohne Augenmaß-Nullstellung) ─
+// Der Sensor liegt immer FLACH SEITLICH (lateral) an: erst am Unterschenkel,
+// dann an der Fußaußenkante. Der Winkel zwischen beiden Lagen in der Sagittalebene
+// ergibt den echten OSG-Winkel: 0° = Fuß 90° zum Unterschenkel.
+const KNEE = {
+  ext:  { label:'Knie gestreckt', pos:'Rückenlage, Bein gestreckt, <b>Ferse frei über der Liegenkante</b>. Unterschenkel liegt auf und bleibt liegen.' },
+  flex: { label:'Knie gebeugt',   pos:'Sitzend an der Liegenkante, <b>Knie ca. 90°</b>, Unterschenkel hängt senkrecht und bleibt ruhig.' },
+};
+const SV_PHASES = [['ext','shank'],['ext','de'],['ext','pf'],['flex','shank'],['flex','de'],['flex','pf'],[null,'res']];
 
 // ── Zustand ────────────────────────────────────────────────────────────────
 const S = {
@@ -125,6 +136,9 @@ const S = {
   peak:null,        // Extremwert im aktuellen Schritt
   A:null, B:null,
   results:[],
+  sv:null,          // Knie-Modus: { i, shank:{ext,flex}, val:{ext:{de,pf}, flex:{de,pf}} }
+  phi:0,            // Winkel des Sensors in seiner Ebene (Grad)
+  flat:1,           // 1 = Sensor liegt sauber seitlich an
 };
 
 // ── Sensor-Daten → Winkel ──────────────────────────────────────────────────
@@ -137,6 +151,10 @@ function onAngles(a) {
   const r = a.X * Math.PI/180, p = a.Y * Math.PI/180;
   const v = [-Math.sin(p), Math.sin(r)*Math.cos(p), Math.cos(r)*Math.cos(p)];
   S.g = S.g ? norm(S.g.map((x,i) => x + ALPHA*(v[i]-x))) : v;
+
+  S.phi = Math.atan2(S.g[1], S.g[0]) * 180/Math.PI;
+  S.flat = Math.sqrt(Math.max(0, 1 - S.g[2]*S.g[2]));
+  if (S.sv) return onAnglesSilf();
 
   let ang = 0;
   if (S.ref) {
@@ -153,6 +171,51 @@ function onAngles(a) {
   if (S.step === 2 && S.axis) S.peak = S.peak == null ? ang : Math.max(S.peak, ang);
   if (S.step === 3) S.peak = S.peak == null ? -ang : Math.max(S.peak, -ang);
   tick();
+}
+function onAnglesSilf() {
+  const [knee, ph] = SV_PHASES[S.sv.i];
+  let v = S.phi;
+  if (ph === 'de' || ph === 'pf') {
+    let d = S.phi - S.sv.shank[knee];
+    d = ((d + 540) % 360) - 180;              // auf -180..180
+    v = Math.abs(d) - 90;                     // + = Dorsalextension, − = Plantarflexion
+    S.signed = v;
+    if (ph === 'de') S.peak = S.peak == null ? v : Math.max(S.peak, v);
+    else             S.peak = S.peak == null ? -v : Math.max(S.peak, -v);
+  }
+  const now = performance.now();
+  S.hist.push([now, v]);
+  while (S.hist.length && now - S.hist[0][0] > 1200) S.hist.shift();
+  tick();
+}
+function svStart() { S.sv = { i:0, shank:{}, val:{ ext:{}, flex:{} } }; svGo(0); }
+function svGo(i) { S.sv.i = i; S.peak = null; S.hist = []; S.signed = 0; render(); }
+function svShank() {
+  const knee = SV_PHASES[S.sv.i][0];
+  S.sv.shank[knee] = S.phi;
+  log(KNEE[knee].label + ': Unterschenkel erfasst (' + S.phi.toFixed(1) + '°)');
+  svGo(S.sv.i + 1);
+}
+function svHold() {
+  const [knee, ph] = SV_PHASES[S.sv.i];
+  S.sv.val[knee][ph] = r0(S.peak ?? 0);
+  svGo(S.sv.i + 1);
+}
+function svAccept(nextSideToo) {
+  const v = S.sv.val, list = [];
+  for (const k of ['ext','flex']) {
+    const res = { type:'rom', joint:'OSG (' + KNEE[k].label + ')', side:S.side, motionA:'Dorsalextension', motionB:'Plantarflexion',
+                  a:v[k].de, b:v[k].pf, notation:notation(v[k].de, v[k].pf), knee:k, ts:Date.now() };
+    S.results = S.results.filter(r => !(r.joint === res.joint && r.side === res.side));
+    S.results.push(res); list.push(res);
+  }
+  const msg = { type:'rom-silfverskiold', side:S.side, extended:list[0], flexed:list[1], deDiff:v.flex.de - v.ext.de, ts:Date.now() };
+  window.dispatchEvent(new CustomEvent('gonioROM', { detail:msg }));
+  try { if (parent !== window) parent.postMessage(msg, '*'); } catch(_) {}
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+  log('Übernommen: OSG ' + S.side + ' gestreckt ' + list[0].notation + ' / gebeugt ' + list[1].notation);
+  S.sv = null;
+  if (nextSideToo) { S.side = S.side === 'links' ? 'rechts' : 'links'; go(1); } else { S.joint = null; go(0); }
 }
 function stability() {             // 0..1  (1 = ruhig seit ≥1 s)
   if (S.hist.length < 3) return 0;
@@ -172,6 +235,8 @@ const r0 = v => Math.round(v);
 function go(step) {
   S.step = step; S.peak = null; S.hist = [];
   if (step <= 1) { S.ref = null; S.axis = null; S.A = null; S.B = null; }
+  if (step === 0) S.sv = null;
+  if (step === 1 && JOINTS[S.joint].silf) return svStart();
   render();
 }
 function zero() {
@@ -209,15 +274,60 @@ function nextSide() { accept(); S.side = S.side === 'links' ? 'rechts' : 'links'
 function nextJoint() { accept(); S.joint = null; go(0); }
 
 // ── Darstellung ────────────────────────────────────────────────────────────
+function stepBar(n, cur) {
+  $('steps').innerHTML = Array.from({length:n}, (_, i) => `<div class="${i < cur ? 'done' : i === cur ? 'cur' : ''}"></div>`).join('');
+}
+function renderSilf() {
+  const [knee, ph] = SV_PHASES[S.sv.i];
+  stepBar(SV_PHASES.length + 1, S.sv.i + 1);
+  const K = knee && KNEE[knee], back = S.sv.i === 0 ? 'go(0)' : `svGo(${S.sv.i - 1})`;
+  const flatWarn = `<div class="sub" id="flatWarn" style="color:var(--orange)"></div>`;
+  let h = '';
+  if (ph === 'shank') {
+    h = `<div class="kicker">OSG ${S.side} · ${K.label} · 1/3</div><h1>Unterschenkel erfassen</h1>
+      <div class="hint">${K.pos}<br><br>Sensor <b>flach seitlich (lateral) an den Unterschenkel</b> halten, Längsachse entlang des Unterschenkels, eine <b>markierte Sensor-Kante zeigt Richtung Fuß</b>.</div>
+      <div class="big"><div class="sub">Ruhig halten …</div><div class="stab" style="max-width:320px"><div id="stab"></div></div>
+        <div class="sub" id="stabTxt"></div>${flatWarn}</div>
+      <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
+      <button class="btn" id="zeroBtn" onclick="svShank()">Unterschenkel erfassen</button></div>`;
+  } else if (ph === 'de' || ph === 'pf') {
+    const de = ph === 'de', m = de ? 'Dorsalextension' : 'Plantarflexion';
+    h = `<div class="kicker">OSG ${S.side} · ${K.label} · ${de ? 2 : 3}/3</div><h1>${m}</h1>
+      <div class="hint">${de ? `Sensor jetzt <b>flach an die Fußaußenkante</b> (Ferse → Kleinzehenballen), dieselbe Seite nach außen, die <b>markierte Kante zeigt jetzt Richtung Zehen</b>. Unterschenkel nicht bewegen.<br><br>Fuß passiv in <b>Dorsalextension</b> bis zum Anschlag drücken und halten.`
+                             : `Fuß in <b>Plantarflexion</b> bis zum Anschlag bewegen und halten.`}</div>
+      <div class="big"><div class="val" id="live">0<sup>°</sup></div>
+        <div class="peak" id="peak">Max –</div>
+        <div class="stab" style="max-width:320px"><div id="stab"></div></div>
+        <div class="sub" id="stabTxt"></div>${flatWarn}</div>
+      <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
+      <button class="btn orange" id="holdBtn" onclick="svHold()">Festhalten</button></div>`;
+  } else {
+    const v = S.sv.val, diff = v.flex.de - v.ext.de;
+    const row = k => `<div class="ritem"><span>${KNEE[k].label}</span><b>${notation(v[k].de, v[k].pf)}</b></div>`;
+    h = `<div class="kicker">Ergebnis · OSG ${S.side}</div><h1>Knie gestreckt / gebeugt</h1>
+      <div class="result"><div class="sub">Dorsalextension gestreckt <b>${v.ext.de}°</b> · gebeugt <b>${v.flex.de}°</b></div>
+        <div class="nn">${diff > 0 ? '+' : ''}${diff}°</div><div class="sub">Zugewinn DE bei Kniebeugung</div></div>
+      <div class="rlist">${row('ext')}${row('flex')}</div>
+      <div class="hint">${diff >= 10 ? 'Deutlich mehr DE bei gebeugtem Knie → Hinweis auf <b>Verkürzung des M. gastrocnemius</b> (Silfverskiöld positiv).'
+        : 'Kaum Unterschied → Einschränkung eher durch <b>M. soleus / Gelenk</b> (Silfverskiöld negativ).'}</div>
+      <div class="row"><button class="btn ghost" onclick="svGo(0)">Gestreckt neu</button><button class="btn ghost" onclick="svGo(3)">Gebeugt neu</button></div>
+      <div style="flex:1"></div>
+      <button class="btn" onclick="svAccept(true)">Übernehmen → OSG ${S.side === 'links' ? 'rechts' : 'links'}</button>
+      <button class="btn ghost" onclick="svAccept(false)">Übernehmen → anderes Gelenk</button>`;
+  }
+  $('screen').innerHTML = h;
+  tick();
+}
 function render() {
-  [...$('steps').children].forEach((d,i) => d.className = i < S.step ? 'done' : i === S.step ? 'cur' : '');
+  if (S.sv) return renderSilf();
+  stepBar(5, S.step);
   const j = S.joint && JOINTS[S.joint];
   const connected = GonioBLE.connected || SIM;
   let h = '';
 
   if (S.step === 0) {
     h = `<div class="kicker">Schritt 1</div><h1>Gelenk &amp; Seite</h1>
-      <div class="grid">${Object.keys(JOINTS).map(k => `<button class="opt ${S.joint===k?'active':''}" onclick="S.joint='${k}';render()">${k}<small>${JOINTS[k].a} / ${JOINTS[k].b}</small></button>`).join('')}</div>
+      <div class="grid">${Object.keys(JOINTS).map(k => `<button class="opt ${S.joint===k?'active':''}" onclick="S.joint='${k}';render()">${JOINTS[k].title || k}<small>${JOINTS[k].sub || JOINTS[k].a + ' / ' + JOINTS[k].b}</small></button>`).join('')}</div>
       <div class="grid">${['links','rechts'].map(s => `<button class="opt ${S.side===s?'active':''}" onclick="S.side='${s}';render()">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>
       ${resultsHTML()}
       <div style="flex:1"></div>
@@ -266,9 +376,12 @@ function tick() {                     // nur Live-Werte aktualisieren
   if ($('stab')) $('stab').style.width = (st*100) + '%';
   if ($('stabTxt')) $('stabTxt').textContent = !S.g ? 'Keine Sensordaten' : st > 0.8 ? 'Stabil ✓' : 'Bewegung erkannt';
   if ($('zeroBtn')) $('zeroBtn').disabled = !S.g;
+  if ($('flatWarn')) $('flatWarn').textContent = S.g && S.flat < 0.8 ? '⚠ Sensor liegt nicht flach seitlich an – Werte ungenau' : '';
   if ($('live')) {
-    const v = S.step === 3 ? -S.signed : S.signed;
-    $('live').innerHTML = r0(S.axis ? v : Math.abs(v)) + '<sup>°</sup>';
+    let v;
+    if (S.sv) v = SV_PHASES[S.sv.i][1] === 'pf' ? -S.signed : S.signed;
+    else { v = S.step === 3 ? -S.signed : S.signed; if (!S.axis) v = Math.abs(v); }
+    $('live').innerHTML = r0(v) + '<sup>°</sup>';
     $('peak').textContent = 'Max ' + (S.peak == null ? '–' : r0(S.peak) + '°');
     $('holdBtn').disabled = S.peak == null;
   }
@@ -310,7 +423,7 @@ if (SIM) {
   setInterval(() => {
     cur += (simTarget - cur) * 0.15;
     const noise = () => (Math.random() - .5) * 3;   // ±1.5° Rauschen
-    onAngles({ X: 12 + noise(), Y: -8 + cur + noise(), Z: 40 + noise()*3 });
+    onAngles({ X: (window.simRoll ?? 12) + noise(), Y: -8 + cur + noise(), Z: 40 + noise()*3 });
   }, 100);
 }
 render();
