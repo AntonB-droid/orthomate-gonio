@@ -101,7 +101,7 @@
   </details>
 </div>
 
-<script src="gonio-ble.js?v=3"></script>
+<script src="gonio-ble.js?v=4"></script>
 <script>
 // ── Gelenk-Definitionen (Neutral-Null-Methode) ─────────────────────────────
 const JOINTS = {
@@ -156,12 +156,23 @@ const S = {
 // Roll/Pitch aus der Sensorfusion → Schwerkraft-Vektor. Yaw (driftet) wird ignoriert.
 // Winkel = Abstand zwischen aktuellem und Referenz-Vektor → unabhängig davon,
 // wie der Sensor ausgerichtet ist (keine Achsenwahl nötig).
-const ALPHA = 0.3;   // Glättung (0..1, kleiner = ruhiger)
 function onAngles(a) {
   $('rX').textContent = a.X.toFixed(1); $('rY').textContent = a.Y.toFixed(1); $('rZ').textContent = a.Z.toFixed(1);
-  const r = a.X * Math.PI/180, p = a.Y * Math.PI/180;
-  const v = [-Math.sin(p), Math.sin(r)*Math.cos(p), Math.cos(r)*Math.cos(p)];
-  S.g = S.g ? norm(S.g.map((x,i) => x + ALPHA*(v[i]-x))) : v;
+  // Schwerkraftrichtung bevorzugt aus der Rohbeschleunigung: kein Nachlaufen/Driften
+  // der Sensorfusion nach Drehungen. Fallback: Roll/Pitch der Fusion.
+  let v, src;
+  if (a.acc && len(a.acc) > 0) { v = norm(a.acc); src = 'Beschleunigung'; }
+  else {
+    const r = a.X * Math.PI/180, p = a.Y * Math.PI/180;
+    v = [-Math.sin(p), Math.sin(r)*Math.cos(p), Math.cos(r)*Math.cos(p)]; src = 'Fusion';
+  }
+  if (src !== S.src) { S.src = src; S.g = null; log('Winkelquelle: ' + src); }
+  // Adaptive Glättung: in Ruhe stark (ruhige Anzeige), bei Bewegung schnell
+  if (S.g) {
+    const d = Math.acos(Math.max(-1, Math.min(1, dot(S.g, v)))) * 180/Math.PI;
+    const k = Math.max(0.1, Math.min(0.6, d / 2));
+    S.g = norm(S.g.map((x,i) => x + k*(v[i]-x)));
+  } else S.g = v;
 
   S.phi = Math.atan2(S.g[1], S.g[0]) * 180/Math.PI;
   S.flat = Math.sqrt(Math.max(0, 1 - S.g[2]*S.g[2]));

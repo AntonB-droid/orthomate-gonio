@@ -23,6 +23,7 @@
   //   [55][61][AccX][AccY][AccZ][GyrX][GyrY][GyrZ][Roll][Pitch][Yaw]  = 20 Byte, int16 LE
   // Ältere/umkonfigurierte Geräte senden 0x55 0x53 (11 Byte, mit Checksumme).
   const buffer = [];
+  let lastAcc = null;     // Rohbeschleunigung (Schwerkraftrichtung) aus 0x51-Paketen
 
   function feed(bytes) {
     for (let i = 0; i < bytes.length; i++) buffer.push(bytes[i]);
@@ -33,17 +34,18 @@
       if (type === 0x61) {
         if (buffer.length < 20) break;
         const p = buffer.splice(0, 20);
-        result = { X: i16(p, 14), Y: i16(p, 16), Z: i16(p, 18) };
+        result = { X: i16(p, 14), Y: i16(p, 16), Z: i16(p, 18), acc: [raw(p, 2), raw(p, 4), raw(p, 6)] };
       } else if (type === 0x53) {
         if (buffer.length < 11) break;
         const p = buffer.slice(0, 11);
         let sum = 0; for (let k = 0; k < 10; k++) sum += p[k];
         if ((sum & 0xff) !== p[10]) { buffer.shift(); continue; }
         buffer.splice(0, 11);
-        result = { X: i16(p, 2), Y: i16(p, 4), Z: i16(p, 6) };
+        result = { X: i16(p, 2), Y: i16(p, 4), Z: i16(p, 6), acc: lastAcc };
       } else if (type >= 0x50 && type <= 0x5f) {
         if (buffer.length < 11) break;
-        buffer.splice(0, 11);           // andere Standardpakete überspringen
+        const p = buffer.splice(0, 11);
+        if (type === 0x51) lastAcc = [raw(p, 2), raw(p, 4), raw(p, 6)];
       } else if (type === 0x71) {
         if (buffer.length < 20) break;
         buffer.splice(0, 20);           // Register-Antwort überspringen
@@ -55,6 +57,10 @@
     return result;
   }
 
+  function raw(p, o) {
+    let v = p[o] | (p[o + 1] << 8);
+    return (v & 0x8000) ? v - 0x10000 : v;
+  }
   function i16(p, o) {
     let v = p[o] | (p[o + 1] << 8);
     if (v & 0x8000) v -= 0x10000;
