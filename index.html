@@ -70,6 +70,11 @@
     border:1px solid var(--border); border-radius:10px; }
   .ritem b { color:#fff; font-weight:500; }
 
+  .chips { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
+  .chips .sub { margin-right:4px; }
+  .chip { padding:7px 14px; border-radius:20px; border:1px solid var(--border); background:var(--surface); color:var(--muted);
+    font-family:'DM Mono',monospace; font-size:12px; cursor:pointer; }
+  .chip.on { border-color:var(--gb); color:var(--gb); background:var(--gg); }
   details.cfg { font-size:11px; color:var(--muted); margin-top:16px; }
   details.cfg summary { cursor:pointer; padding:6px 0; }
   .cfg input { width:100%; background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:8px;
@@ -133,7 +138,10 @@ const S = {
   step:0, joint:null, side:null,
   g:null,           // geglätteter Schwerkraft-Vektor (Sensor-KS)
   ref:null,         // Referenz bei Nullstellung
-  axis:null,        // Drehachse für Richtung A (Vorzeichen)
+  axis:null,        // Vorzeichen (+1/−1), damit Richtung A positiv ist
+  axisMode:'auto',  // Messachse: 'auto' | 0 | 1 | 2  (Sensor-X/Y/Z)
+  k:null,           // aktive Messachse (Index)
+  proj:1,           // Anteil der Schwerkraft senkrecht zur Messachse (Messbarkeit)
   signed:0,         // aktueller Winkel relativ zur Nullstellung (+ = Richtung A)
   hist:[],          // [t, angle] für Ruhe-Erkennung
   peak:null,        // Extremwert im aktuellen Schritt
@@ -159,12 +167,32 @@ function onAngles(a) {
   S.flat = Math.sqrt(Math.max(0, 1 - S.g[2]*S.g[2]));
   if (S.sv) return onAnglesSilf();
 
+  // Nur die Drehung um EINE Sensor-Achse zählt. Verdrehen/seitliches Kippen
+  // (Drehung um die anderen Achsen) wird herausgerechnet.
   let ang = 0;
   if (S.ref) {
-    const c = cross(S.ref, S.g);
-    ang = Math.atan2(len(c), dot(S.ref, S.g)) * 180/Math.PI;
-    if (S.step === 2 && !S.axis && ang > 4) S.axis = norm(c);    // erste deutliche Bewegung = Richtung A
-    if (S.axis) ang *= Math.sign(dot(c, S.axis)) || 1;
+    if (S.k == null && S.axisMode !== 'auto') S.k = S.axisMode;
+    if (S.k == null) {
+      const c = cross(S.ref, S.g);
+      const total = Math.atan2(len(c), dot(S.ref, S.g)) * 180/Math.PI;
+      if (S.step === 2 && total > 4) {                     // erste deutliche Bewegung → Achse einrasten
+        const m = c.map(Math.abs); S.k = m.indexOf(Math.max(...m));
+        log('Messachse eingerastet: ' + 'XYZ'[S.k]);
+      } else ang = total;
+    }
+    if (S.k != null) {
+      // Hebelachse l = die Achse, die bei Null am waagerechtesten liegt. Gemessen wird ihre
+      // Neigungsänderung → Verdrehen um die Hebelachse selbst ändert den Wert nicht.
+      const [i, j] = [[1,2],[2,0],[0,1]][S.k], a = S.ref, b = S.g;
+      const l = Math.abs(a[i]) <= Math.abs(a[j]) ? i : j, m = l === i ? j : i;
+      const s0 = Math.sign(a[m]) || 1;
+      const elev = g => Math.atan2(g[l], s0 * (Math.sign(g[m]) || 1) * Math.sqrt(Math.max(0, 1 - g[l]*g[l])));
+      ang = (elev(b) - elev(a)) * 180/Math.PI;
+      ang = ((ang + 540) % 360) - 180;
+      S.proj = Math.hypot(a[i], a[j]);
+      if (!S.axis && S.step === 2 && Math.abs(ang) > 3) S.axis = Math.sign(ang);
+      if (S.axis) ang *= S.axis;
+    }
   }
   S.signed = ang;
   const now = performance.now();
@@ -237,14 +265,14 @@ const r0 = v => Math.round(v);
 // ── Ablauf ─────────────────────────────────────────────────────────────────
 function go(step) {
   S.step = step; S.peak = null; S.hist = [];
-  if (step <= 1) { S.ref = null; S.axis = null; S.A = null; S.B = null; }
+  if (step <= 1) { S.ref = null; S.axis = null; S.k = null; S.A = null; S.B = null; }
   if (step === 0) S.sv = null;
   if (step === 1 && JOINTS[S.joint].silf) return svStart();
   render();
 }
 function zero() {
   if (!S.g) return;
-  S.ref = S.g.slice(); S.axis = null; S.hist = [];
+  S.ref = S.g.slice(); S.axis = null; S.k = null; S.hist = [];
   log('Nullstellung gesetzt');
   go(2);
 }
@@ -253,7 +281,17 @@ function hold(which) {
   if (JOINTS[S.joint].single) { S.A = Math.round((S.peak ?? 0) * 10) / 10; S.B = null; return go(4); }
   if (which === 'A') { S.A = v; go(3); } else { S.B = v; go(4); }
 }
-function redo(which) { if (which === 'A') { S.axis = null; go(2); } else go(3); }
+function redo(which) { if (which === 'A') { S.axis = null; if (S.axisMode === 'auto') S.k = null; go(2); } else go(3); }
+function setAxisMode(m) {
+  S.axisMode = m; S.k = null; S.axis = null; S.peak = null; S.hist = [];
+  if (S.step === 3) S.step = 2;          // Vorzeichen neu bestimmen
+  render();
+}
+function axisChips() {
+  const cur = ' <span id="axisNow">' + (S.k == null ? '' : 'XYZ'[S.k]) + '</span>';
+  const b = (m, l) => `<button class="chip ${S.axisMode === m ? 'on' : ''}" onclick="setAxisMode(${m === 'auto' ? "'auto'" : m})">${l}</button>`;
+  return `<div class="chips"><span class="sub">Messachse</span>${b('auto', 'Auto' + (S.axisMode === 'auto' ? cur : ''))}${b(0,'X')}${b(1,'Y')}${b(2,'Z')}</div>`;
+}
 
 // Neutral-Null-Notation: A–0–B, bei Defizit wandert die 0 nach außen
 function notation(A, B) {
@@ -360,7 +398,8 @@ function render() {
       <div class="big"><div class="val" id="live">0<sup>°</sup></div>
         <div class="peak" id="peak">Max –</div>
         <div class="stab" style="max-width:320px"><div id="stab"></div></div>
-        <div class="sub" id="stabTxt"></div></div>
+        <div class="sub" id="stabTxt"></div><div class="sub" id="flatWarn" style="color:var(--orange)"></div></div>
+      ${axisChips()}
       <div class="row"><button class="btn ghost" onclick="${isA ? 'go(1)' : "redo('A')"}">${isA ? '↺ Neu nullen' : '← ' + j.a}</button>
       <button class="btn orange" id="holdBtn" onclick="hold('${isA?'A':'B'}')">Festhalten</button></div>`;
   }
@@ -394,7 +433,10 @@ function tick() {                     // nur Live-Werte aktualisieren
   if ($('stab')) $('stab').style.width = (st*100) + '%';
   if ($('stabTxt')) $('stabTxt').textContent = !S.g ? 'Keine Sensordaten' : st > 0.8 ? 'Stabil ✓' : 'Bewegung erkannt';
   if ($('zeroBtn')) $('zeroBtn').disabled = !S.g;
-  if ($('flatWarn')) $('flatWarn').textContent = S.g && S.flat < 0.8 ? '⚠ Sensor liegt nicht flach seitlich an – Werte ungenau' : '';
+  if ($('flatWarn')) $('flatWarn').textContent = S.sv
+    ? (S.g && S.flat < 0.8 ? '⚠ Sensor liegt nicht flach seitlich an – Werte ungenau' : '')
+    : (S.k != null && S.proj < 0.35 ? '⚠ Messachse steht fast senkrecht – Sensor anders anlegen oder Achse wechseln' : '');
+  if ($('axisNow') && S.k != null) $('axisNow').textContent = 'XYZ'[S.k];
   if ($('ret')) $('ret').textContent = (S.axis ? S.signed : Math.abs(S.signed)).toFixed(1) + '°';
   if ($('live')) {
     let v;
@@ -443,7 +485,7 @@ if (SIM) {
   setInterval(() => {
     cur += (simTarget - cur) * 0.15;
     const noise = () => (Math.random() - .5) * 3;   // ±1.5° Rauschen
-    onAngles({ X: (window.simRoll ?? 12) + noise(), Y: -8 + cur + noise(), Z: 40 + noise()*3 });
+    onAngles({ X: (window.simRoll ?? 12) + (window.simTwist ?? 0) + noise(), Y: -8 + cur + noise(), Z: 40 + noise()*3 });
   }, 100);
 }
 render();
