@@ -383,7 +383,7 @@ function render() {
 
   if (S.step === 0) {
     h = `<div class="kicker">Schritt 1</div><h1>Was wird gemessen?</h1>
-      <div class="grid">${Object.keys(JOINTS).map(k => `<button class="opt ${S.joint===k?'active':''}" onclick="S.joint='${k}';render()">${JOINTS[k].title || k}<small>${JOINTS[k].sub || JOINTS[k].a + ' / ' + JOINTS[k].b}</small></button>`).join('')}</div>
+      <div class="grid">${Object.keys(JOINTS).map(k => `<button class="opt ${S.joint===k?'active':''}" onclick="selectJoint('${k}')">${JOINTS[k].title || k}<small>${JOINTS[k].sub || JOINTS[k].a + ' / ' + JOINTS[k].b}</small></button>`).join('')}</div>
       ${j && j.single
         ? `<input id="springLabel" class="opt" style="font-family:'DM Mono',monospace;font-size:14px;font-weight:400" placeholder="Bezeichnung (optional), z. B. Feder 3 / 4 mm" value="${(S.label||'').replace(/"/g,'&quot;')}" oninput="S.label=this.value">`
         : `<div class="grid">${['links','rechts'].map(s => `<button class="opt ${S.side===s?'active':''}" onclick="S.side='${s}';render()">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
@@ -469,9 +469,18 @@ GonioBLE.onStatus = (state, text) => {
   if (state === 'err' && !GonioBLE.connected) S.g = null;
   render();
 };
+// Gelenk/Option antippen: Auswahl setzen und – falls noch kein Sensor verbunden ist –
+// direkt das Bluetooth-Fenster öffnen (muss synchron im Tipp passieren).
+function selectJoint(k) {
+  S.joint = k; render();
+  if (!GonioBLE.connected && !SIM && GonioBLE.platform() !== 'none') toggleConnect();
+}
 async function toggleConnect() {
   if (GonioBLE.connected) return GonioBLE.disconnect();
+  if (S.connecting) return;
+  S.connecting = true;
   try { await GonioBLE.connect(); } catch (e) { log('Abbruch: ' + (e && e.message || e)); }
+  finally { S.connecting = false; }
 }
 function log(m) { const el = $('log'); el.textContent += new Date().toLocaleTimeString('de-DE') + '  ' + m + '\n'; el.scrollTop = el.scrollHeight; }
 
