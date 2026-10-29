@@ -112,6 +112,9 @@ const JOINTS = {
   Hüfte: { name:'Hüfte', a:'Extension', b:'Flexion',
            place:'Sensor <b>lateral am Oberschenkel</b>. <b>Becken fixieren</b>.',
            neutral:'Oberschenkel in Verlängerung des Rumpfes.' },
+  Feder: { name:'Carbonfeder', title:'Carbonfeder', sub:'Auslenkung nach vorne', a:'Auslenkung', single:true,
+           place:'Sensor <b>flach auf den Rücken der Feder</b> (hinten) kleben/clippen. <b>Feder unten fest einspannen</b> bzw. Fuß/Basis fixieren.',
+           neutral:'Feder unbelastet in Ausgangsstellung, nicht berühren.' },
   OSGK:  { name:'OSG', title:'OSG gestr./gebeugt', sub:'DE/PF Knie gestreckt + gebeugt', a:'Dorsalextension', b:'Plantarflexion', silf:true },
 };
 
@@ -247,6 +250,7 @@ function zero() {
 }
 function hold(which) {
   const v = r0(S.peak ?? 0);
+  if (JOINTS[S.joint].single) { S.A = Math.round((S.peak ?? 0) * 10) / 10; S.B = null; return go(4); }
   if (which === 'A') { S.A = v; go(3); } else { S.B = v; go(4); }
 }
 function redo(which) { if (which === 'A') { S.axis = null; go(2); } else go(3); }
@@ -260,8 +264,10 @@ function notation(A, B) {
 
 function accept() {
   const j = JOINTS[S.joint];
-  const res = { type:'rom', joint:S.joint, side:S.side, motionA:j.a, motionB:j.b, a:S.A, b:S.B,
-                notation:notation(S.A, S.B), ts:Date.now() };
+  const res = j.single
+    ? { type:'spring', joint:j.name, side:S.label || '', motionA:j.a, a:S.A, notation:S.A.toFixed(1) + '°', ts:Date.now() }
+    : { type:'rom', joint:S.joint, side:S.side, motionA:j.a, motionB:j.b, a:S.A, b:S.B,
+        notation:notation(S.A, S.B), ts:Date.now() };
   S.results = S.results.filter(r => !(r.joint === res.joint && r.side === res.side));
   S.results.push(res);
   window.dispatchEvent(new CustomEvent('gonioROM', { detail:res }));
@@ -272,6 +278,7 @@ function accept() {
 }
 function nextSide() { accept(); S.side = S.side === 'links' ? 'rechts' : 'links'; go(1); }
 function nextJoint() { accept(); S.joint = null; go(0); }
+function nextSpring() { accept(); S.label = ''; go(0); }
 
 // ── Darstellung ────────────────────────────────────────────────────────────
 function stepBar(n, cur) {
@@ -326,16 +333,18 @@ function render() {
   let h = '';
 
   if (S.step === 0) {
-    h = `<div class="kicker">Schritt 1</div><h1>Gelenk &amp; Seite</h1>
+    h = `<div class="kicker">Schritt 1</div><h1>Was wird gemessen?</h1>
       <div class="grid">${Object.keys(JOINTS).map(k => `<button class="opt ${S.joint===k?'active':''}" onclick="S.joint='${k}';render()">${JOINTS[k].title || k}<small>${JOINTS[k].sub || JOINTS[k].a + ' / ' + JOINTS[k].b}</small></button>`).join('')}</div>
-      <div class="grid">${['links','rechts'].map(s => `<button class="opt ${S.side===s?'active':''}" onclick="S.side='${s}';render()">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>
+      ${j && j.single
+        ? `<input id="springLabel" class="opt" style="font-family:'DM Mono',monospace;font-size:14px;font-weight:400" placeholder="Bezeichnung (optional), z. B. Feder 3 / 4 mm" value="${(S.label||'').replace(/"/g,'&quot;')}" oninput="S.label=this.value">`
+        : `<div class="grid">${['links','rechts'].map(s => `<button class="opt ${S.side===s?'active':''}" onclick="S.side='${s}';render()">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${resultsHTML()}
       <div style="flex:1"></div>
       ${connected ? '' : '<div class="hint">Zuerst oben rechts den <b>Sensor verbinden</b>.</div>'}
-      <button class="btn" ${S.joint && S.side && connected ? '' : 'disabled'} onclick="go(1)">Weiter →</button>`;
+      <button class="btn" ${S.joint && (S.side || (j && j.single)) && connected ? '' : 'disabled'} onclick="go(1)">Weiter →</button>`;
   }
   else if (S.step === 1) {
-    h = `<div class="kicker">Schritt 2 · ${j.name} ${S.side}</div><h1>Sensor anlegen &amp; nullen</h1>
+    h = `<div class="kicker">Schritt 2 · ${j.name} ${j.single ? (S.label||'') : S.side}</div><h1>Sensor anlegen &amp; nullen</h1>
       <div class="hint">${j.place}<br><br>${j.neutral}</div>
       <div class="big"><div class="sub">Ruhig halten …</div><div class="stab" style="max-width:320px"><div id="stab"></div></div>
         <div class="sub" id="stabTxt"></div></div>
@@ -344,8 +353,9 @@ function render() {
   }
   else if (S.step === 2 || S.step === 3) {
     const isA = S.step === 2, m = isA ? j.a : j.b;
-    h = `<div class="kicker">Schritt ${S.step+1} · ${j.name} ${S.side}</div><h1>${m}</h1>
-      <div class="hint">${isA ? `Langsam in <b>${m}</b> bis zur Endstellung bewegen und kurz halten.`
+    h = `<div class="kicker">Schritt ${S.step+1} · ${j.name} ${j.single ? (S.label||'') : S.side}</div><h1>${m}</h1>
+      <div class="hint">${j.single ? `Feder langsam <b>nach vorne</b> bis zur gewünschten Last bzw. zum Anschlag drücken und kurz halten.`
+                     : isA ? `Langsam in <b>${m}</b> bis zur Endstellung bewegen und kurz halten.`
                              : `Zurück über die Nullstellung in <b>${m}</b> bis zur Endstellung bewegen und kurz halten.`}</div>
       <div class="big"><div class="val" id="live">0<sup>°</sup></div>
         <div class="peak" id="peak">Max –</div>
@@ -353,6 +363,14 @@ function render() {
         <div class="sub" id="stabTxt"></div></div>
       <div class="row"><button class="btn ghost" onclick="${isA ? 'go(1)' : "redo('A')"}">${isA ? '↺ Neu nullen' : '← ' + j.a}</button>
       <button class="btn orange" id="holdBtn" onclick="hold('${isA?'A':'B'}')">Festhalten</button></div>`;
+  }
+  else if (S.step === 4 && j.single) {
+    h = `<div class="kicker">Ergebnis · ${j.name} ${S.label||''}</div><h1>Auslenkung nach vorne</h1>
+      <div class="result"><div class="nn">${S.A.toFixed(1)}°</div><div class="sub">maximale Auslenkung gegenüber Nullstellung</div></div>
+      <div class="hint">Feder loslassen – <b>Rückstellung</b> (sollte nahe 0° sein): <b id="ret">–</b></div>
+      <div style="flex:1"></div>
+      <button class="btn ghost" onclick="redo('A')">Nochmal messen (gleiche Null)</button>
+      <button class="btn" onclick="nextSpring()">Übernehmen → nächste Messung</button>`;
   }
   else if (S.step === 4) {
     const n = notation(S.A, S.B);
@@ -377,12 +395,14 @@ function tick() {                     // nur Live-Werte aktualisieren
   if ($('stabTxt')) $('stabTxt').textContent = !S.g ? 'Keine Sensordaten' : st > 0.8 ? 'Stabil ✓' : 'Bewegung erkannt';
   if ($('zeroBtn')) $('zeroBtn').disabled = !S.g;
   if ($('flatWarn')) $('flatWarn').textContent = S.g && S.flat < 0.8 ? '⚠ Sensor liegt nicht flach seitlich an – Werte ungenau' : '';
+  if ($('ret')) $('ret').textContent = (S.axis ? S.signed : Math.abs(S.signed)).toFixed(1) + '°';
   if ($('live')) {
     let v;
     if (S.sv) v = SV_PHASES[S.sv.i][1] === 'pf' ? -S.signed : S.signed;
     else { v = S.step === 3 ? -S.signed : S.signed; if (!S.axis) v = Math.abs(v); }
-    $('live').innerHTML = r0(v) + '<sup>°</sup>';
-    $('peak').textContent = 'Max ' + (S.peak == null ? '–' : r0(S.peak) + '°');
+    const dec = S.joint && JOINTS[S.joint].single ? 1 : 0;
+    $('live').innerHTML = v.toFixed(dec) + '<sup>°</sup>';
+    $('peak').textContent = 'Max ' + (S.peak == null ? '–' : S.peak.toFixed(dec) + '°');
     $('holdBtn').disabled = S.peak == null;
   }
 }
