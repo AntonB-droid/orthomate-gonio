@@ -270,7 +270,7 @@ const MS_SLOTS = {
   shank: { label:'Unterschenkel', where:'lateral am Unterschenkel, Kante → Fuß' },
   foot:  { label:'Fuß', where:'Fußaußenkante (Ferse → Kleinzehenballen), Kante → Zehen' },
 };
-const MS_PHASES = [[null,'assign'],[null,'place'],['ext','de'],['ext','pf'],['flex','de'],['flex','pf'],[null,'res']];
+const MS_PHASES = [[null,'assign'],[null,'zero'],[null,'cal'],['ext','de'],['ext','pf'],['flex','de'],['flex','pf'],[null,'res']];
 const KNEE_TARGET = { ext:0, flex:90 }, KNEE_TOL = 7;
 const KNEE_POS = {
   ext:  'Knie <b>gestreckt</b> (Ziel 0°). Rückenlage oder Langsitz.',
@@ -377,29 +377,97 @@ function smoothG(prev, v) {
 }
 const wrap = d => ((d + 540) % 360) - 180;
 
+// Rohdaten je Sensor: Schwerkraftrichtung ungeglättet (Glättung erst am Endwinkel)
 function msOnAngles(k, a) {
   if (!S.ms) return;
   const s = S.ms.slots[k];
   const [v, src] = gravityFrom(a);
   if (src !== s.src) { s.src = src; s.g = null; }
-  const prev = s.g;
-  s.g = smoothG(s.g, v);
-  if (prev) s.motion = 0.8 * s.motion + 0.2 * Math.acos(Math.max(-1, Math.min(1, dot(prev, s.g)))) * 180/Math.PI * 10;
-  s.phi = Math.atan2(s.g[1], s.g[0]) * 180/Math.PI;
-  s.flat = Math.sqrt(Math.max(0, 1 - s.g[2]*s.g[2]));
+  s.g = v;
+  // Bewegungs-Anzeige (nur fürs Zuordnen) aus leicht geglätteten Daten, damit Rauschen nicht zählt
+  const pm = s.gm; s.gm = smoothG(s.gm, v);
+  const d = pm ? Math.acos(Math.max(-1, Math.min(1, dot(pm, s.gm)))) * 180/Math.PI : 0;
+  s.motion = 0.8 * s.motion + 0.2 * d * 10;
+  s.phi = Math.atan2(v[1], v[0]) * 180/Math.PI;
+  s.flat = Math.sqrt(Math.max(0, 1 - v[2]*v[2]));
   s.last = performance.now();
-  if (MS_PHASES[S.ms.i][1] === 'assign') { msIdentCheck(); if (k === MS_FILL.find(x => S.ms.slots[x].connected)) msTick(); return; }
+  (s.buf = s.buf || []).push([s.last, v]);
+  while (s.buf.length && s.last - s.buf[0][0] > 1000) s.buf.shift();
+  const ph = MS_PHASES[S.ms.i][1];
+  if (ph === 'assign') { msIdentCheck(); if (k === MS_FILL.find(x => S.ms.slots[x].connected)) msTick(); return; }
   if (k === 'shank') msUpdate();      // einmal pro Unterschenkel-Paket rechnen
 }
 function msHas(k) { const s = S.ms.slots[k]; return s.connected && s.g && performance.now() - s.last < 1500; }
 
-function msUpdate() {
-  const m = S.ms, sl = m.slots;
-  m.knee = msHas('thigh') && msHas('shank') ? Math.abs(wrap(sl.shank.phi - sl.thigh.phi)) - m.kneeOff : null;
-  m.osg  = msHas('shank') && msHas('foot')  ? Math.abs(wrap(sl.foot.phi - sl.shank.phi)) - 90 : null;
+// Drehung eines Sensors um SEINE kalibrierte Achse (Grad), relativ zur Nullstellung.
+// Dadurch egal, wie der Sensor montiert ist; Verdrehen um andere Achsen zählt nicht.
+function msTheta(s, g) {
+  const a = s.axis, p0 = s.g0.map((x,i) => x - dot(s.g0, a)*a[i]), p = g.map((x,i) => x - dot(g, a)*a[i]);
+  return Math.atan2(dot(cross(p0, p), a), dot(p0, p)) * 180/Math.PI;
+}
+// Robuster Filter: Werte der letzten 0,5 s, obere/untere 20 % verwerfen, Rest mitteln
+function robust(buf) {
+  if (!buf.length) return null;
+  const v = buf.map(b => b[1]).sort((x, y) => x - y), cut = Math.floor(v.length * 0.2);
+  const core = v.slice(cut, v.length - cut || undefined);
+  return core.reduce((x, y) => x + y, 0) / core.length;
+}
+function pushBuf(name, val) {
+  const m = S.ms, now = performance.now();
+  const b = (m[name] = m[name] || []);
+  if (val == null) { b.length = 0; return null; }
+  b.push([now, val]);
+  while (b.length && now - b[0][0] > 500) b.shift();
+  return robust(b);
+}
+// Anzeige mit Totband: springt erst bei > 0,6° Änderung
+function shown(name, v) {
+  const m = S.ms; m.disp = m.disp || {};
+  if (v == null) { delete m.disp[name]; return null; }
+  if (m.disp[name] == null || Math.abs(v - m.disp[name]) > 0.6) m.disp[name] = v;
+  return m.disp[name];
+}
+function msStill(k, deg) {           // Sensor ruhig in der letzten Sekunde?
+  const s = S.ms.slots[k]; if (!s.buf || s.buf.length < 5) return false;
+  const ref = s.buf[s.buf.length - 1][1];
+  return s.buf.every(b => Math.acos(Math.max(-1, Math.min(1, dot(b[1], ref)))) * 180/Math.PI < deg);
+}
+function meanG(k) { const s = S.ms.slots[k]; return norm(s.buf.reduce((acc, b) => acc.map((x,i) => x + b[1][i]), [0,0,0])); }
 
-  const [knee, ph] = MS_PHASES[m.i];
-  if ((ph === 'de' || ph === 'pf') && m.osg != null) {
+function msUpdate() {
+  const m = S.ms, sl = m.slots, [knee, ph] = MS_PHASES[m.i];
+  const keys = msConnectedKeys();
+
+  if (ph === 'cal' && !m.calDone) {
+    for (const k of keys) {
+      const s = sl[k]; if (!s.g0 || !s.g) continue;
+      const ang = Math.acos(Math.max(-1, Math.min(1, dot(s.g0, s.g)))) * 180/Math.PI;
+      if (!s.calMax || ang > s.calMax.ang) s.calMax = { ang, g: s.g.slice() };
+    }
+    const maxes = keys.map(k => sl[k].calMax ? sl[k].calMax.ang : 0);
+    m.calProgress = Math.min(...maxes);
+    if (m.calProgress >= 20) {
+      const spread = Math.max(...maxes) - Math.min(...maxes);
+      if (spread > 10) { m.calWarn = 'Bein nicht als Ganzes bewegt (Unterschied ' + r0(spread) + '°) – Knie und Fuß festhalten und nochmal.'; for (const k of keys) sl[k].calMax = null; }
+      else {
+        for (const k of keys) sl[k].axis = norm(cross(sl[k].g0, sl[k].calMax.g));
+        m.calDone = true; m.calWarn = '';
+        log('Kalibrierung ok (Bewegung ' + maxes.map(r0).join('/') + '°)');
+        try { navigator.vibrate && navigator.vibrate(120); } catch(_) {}
+        render();
+      }
+    }
+  }
+
+  const ready = k => msHas(k) && sl[k].axis;
+  const kneeRaw = ready('thigh') && ready('shank') ? Math.abs(msTheta(sl.shank, sl.shank.g) - msTheta(sl.thigh, sl.thigh.g)) + m.kneeOff : null;
+  let osgRel = ready('shank') && ready('foot') ? msTheta(sl.foot, sl.foot.g) - msTheta(sl.shank, sl.shank.g) : null;
+  if (osgRel != null && !m.osgSign && ph === 'de' && Math.abs(osgRel) > 4) m.osgSign = Math.sign(osgRel);   // erste Bewegung = Dorsalextension
+  const osgRaw = osgRel == null ? null : (m.osgSign ? m.osgSign * osgRel : Math.abs(osgRel)) + m.osgOff;
+  m.knee = pushBuf('kneeBuf', kneeRaw);
+  m.osg  = pushBuf('osgBuf', osgRaw);
+
+  if ((ph === 'de' || ph === 'pf') && m.osg != null && m.osgSign) {
     const v = ph === 'de' ? m.osg : -m.osg;
     // Zählen erst, wenn das Knie ≥ 0,5 s im Zielbereich steht (nicht beim Durchlaufen)
     const inTol = m.knee == null || Math.abs(m.knee - KNEE_TARGET[knee]) <= KNEE_TOL;
@@ -407,12 +475,27 @@ function msUpdate() {
     const kneeOk = m.knee == null || (inTol && performance.now() - m.kneeOkSince >= 500);
     if (kneeOk && (S.peak == null || v > S.peak)) { S.peak = v; S.peakKnee = m.knee; }
   }
-  const now = performance.now();
-  S.hist.push([now, m.osg ?? 0]);
-  while (S.hist.length && now - S.hist[0][0] > 1200) S.hist.shift();
   msTick();
 }
-function msKneeZero() { if (S.ms.knee != null) { S.ms.kneeOff += S.ms.knee; log('Knie-Null gesetzt (Offset ' + S.ms.kneeOff.toFixed(1) + '°)'); } }
+// Nullstellung: Knie gestreckt, Fuß 90°. Liegen die Sensoren sauber seitlich an,
+// wird der echte Restwinkel (z. B. Streckdefizit) automatisch übernommen.
+function msZero() {
+  const m = S.ms, sl = m.slots, keys = msConnectedKeys();
+  for (const k of keys) { sl[k].g0 = meanG(k); sl[k].axis = null; sl[k].calMax = null; }
+  const lat = k => sl[k].flat > 0.9;
+  m.osgOff = 0; m.kneeOff = 0; m.osgSign = 0; m.calDone = false; m.calProgress = 0; m.calWarn = '';
+  if (lat('shank') && lat('foot')) {
+    const o = Math.abs(wrap(sl.foot.phi - sl.shank.phi)) - 90;
+    if (Math.abs(o) < 25) m.osgOff = o;
+  }
+  if (sl.thigh.connected && lat('thigh') && lat('shank')) {
+    const o = Math.abs(wrap(sl.shank.phi - sl.thigh.phi));
+    if (o < 25) m.kneeOff = o;
+  }
+  log('Nullstellung gesetzt (OSG ' + m.osgOff.toFixed(1) + '°, Knie ' + m.kneeOff.toFixed(1) + '°)');
+  msGo(2);
+}
+function msKneeZero() { if (S.ms.knee != null) { S.ms.kneeOff -= S.ms.knee; log('Knie-Null gesetzt'); } }
 function msHold() {
   const [knee, ph] = MS_PHASES[S.ms.i];
   S.ms.val[knee][ph] = r0(S.peak ?? 0);
@@ -435,7 +518,7 @@ function msAccept(nextSide) {
   log('Übernommen (Multi): OSG ' + S.side + ' gestreckt ' + list[0].notation + ' / gebeugt ' + list[1].notation);
   if (nextSide) {                          // Sensoren bleiben verbunden, nur Seite wechseln
     S.side = S.side === 'links' ? 'rechts' : 'links';
-    S.ms.val = { ext:{}, flex:{} }; S.ms.kneeOff = 0; msGo(1);
+    S.ms.val = { ext:{}, flex:{} }; S.ms.kneeOff = 0; S.ms.osgSign = 0; msGo(1);   // neue Seite: neu nullen + kalibrieren
   } else { msStop(); S.joint = null; go(0); }
 }
 
@@ -475,15 +558,25 @@ function renderMulti() {
       <div style="flex:1"></div>
       <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
       <button class="btn" ${done ? '' : 'disabled'} onclick="msGo(1)">Weiter →</button></div>`;
-  } else if (ph === 'place') {
-    h = `<div class="kicker">OSG + Knie · ${S.side}</div><h1>Sensoren anlegen</h1>
-      <div class="hint">Alle Sensoren <b>flach seitlich (lateral)</b>, markierte Kante zeigt <b>nach distal</b>:<br>
-        ${Object.keys(MS_SLOTS).filter(k => m.slots[k].connected).map(k => `• <b>${MS_SLOTS[k].label}</b>: ${MS_SLOTS[k].where}`).join('<br>')}</div>
-      ${live}
-      <div class="sub" id="msWarn" style="color:var(--orange)"></div>
-      ${m.slots.thigh.connected ? `<button class="btn ghost" onclick="msKneeZero()">Knie steht gerade → Knie = 0° setzen</button>` : ''}
-      <div style="flex:1"></div>
-      <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button><button class="btn" onclick="msGo(2)">Messen →</button></div>`;
+  } else if (ph === 'zero') {
+    h = `<div class="kicker">OSG + Knie · ${S.side}</div><h1>Anlegen &amp; Nullstellung</h1>
+      <div class="hint">Sensoren <b>fest</b> anbringen (Klett/Tape) – Lage ist egal, am besten seitlich:<br>
+        ${msConnectedKeys().map(k => `• <b>${MS_SLOTS[k].label}</b>: ${MS_SLOTS[k].where}`).join('<br>')}<br><br>
+        Dann <b>Knie gestreckt, Fuß 90°</b> und ruhig halten.</div>
+      <div class="big"><div class="stab" style="max-width:320px"><div id="stab"></div></div><div class="sub" id="stabTxt"></div></div>
+      <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
+      <button class="btn" id="zeroBtn" onclick="msZero()">Nullstellung setzen</button></div>`;
+  } else if (ph === 'cal') {
+    h = `<div class="kicker">OSG + Knie · ${S.side}</div><h1>Kalibrieren</h1>
+      <div class="hint">Das <b>gestreckte Bein als Ganzes</b> langsam ca. <b>30° anheben</b> und wieder ablegen.<br>
+        Knie gestreckt und Fuß in 90° dabei festhalten – nichts abknicken.</div>
+      <div class="big">${m.calDone ? '<div class="nn" style="color:var(--gb)">✓</div><div class="sub">Kalibriert – Bein ablegen</div>'
+        : `<div class="stab" style="max-width:320px"><div id="calBar"></div></div><div class="sub" id="calTxt"></div>`}
+        <div class="sub" style="color:var(--orange)">${m.calWarn || ''}</div></div>
+      ${m.calDone ? live : ''}
+      ${m.calDone && m.slots.thigh.connected ? `<button class="btn ghost" onclick="msKneeZero()">Knie steht gerade → Knie = 0° setzen</button>` : ''}
+      <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
+      <button class="btn" ${m.calDone ? '' : 'disabled'} onclick="msGo(3)">Messen →</button></div>`;
   } else if (ph === 'de' || ph === 'pf') {
     const de = ph === 'de', mo = de ? 'Dorsalextension' : 'Plantarflexion';
     h = `<div class="kicker">OSG ${S.side} · ${KNEE[knee].label}</div><h1>${mo}</h1>
@@ -506,7 +599,7 @@ function renderMulti() {
       <div class="rlist">${row('ext')}${row('flex')}</div>
       <div class="hint">${diff >= 10 ? 'Deutlich mehr DE bei gebeugtem Knie → Hinweis auf <b>Verkürzung des M. gastrocnemius</b> (Silfverskiöld positiv).'
         : 'Kaum Unterschied → Einschränkung eher durch <b>M. soleus / Gelenk</b> (Silfverskiöld negativ).'}</div>
-      <div class="row"><button class="btn ghost" onclick="msGo(2)">Gestreckt neu</button><button class="btn ghost" onclick="msGo(4)">Gebeugt neu</button></div>
+      <div class="row"><button class="btn ghost" onclick="msGo(3)">Gestreckt neu</button><button class="btn ghost" onclick="msGo(5)">Gebeugt neu</button></div>
       <div style="flex:1"></div>
       <button class="btn" onclick="msAccept(true)">Übernehmen → OSG ${S.side === 'links' ? 'rechts' : 'links'}</button>
       <button class="btn ghost" onclick="msAccept(false)">Übernehmen → fertig</button>`;
@@ -517,25 +610,35 @@ function renderMulti() {
 function msTick() {
   const m = S.ms; if (!m) return;
   const [knee, ph] = MS_PHASES[m.i];
-  for (const k of Object.keys(MS_SLOTS)) if ($('mot_' + k)) $('mot_' + k).style.width = Math.min(100, m.slots[k].motion * 4) + '%';
-  if ($('msKnee')) $('msKnee').innerHTML = m.knee != null ? r0(m.knee) + '°'
+  for (const k of MS_FILL) if ($('mot_' + k)) $('mot_' + k).style.width = Math.min(100, m.slots[k].motion * 4) + '%';
+  const kd = shown('knee', m.knee), od = shown('osg', m.osg);
+  if ($('msKnee')) $('msKnee').innerHTML = kd != null ? r0(kd) + '°'
     : `<span style="font-size:13px;font-family:'DM Mono',monospace;font-weight:400;color:var(--muted)">${m.slots.thigh.connected ? 'keine Daten' : 'braucht Oberschenkel-Sensor'}</span>`;
-  if ($('msOsg'))  $('msOsg').textContent  = m.osg == null ? '–' : r0(m.osg) + '°';
+  if ($('msOsg'))  $('msOsg').textContent  = od == null ? '–' : r0(od) + '°';
   if ($('msWarn')) {
-    const bad = Object.keys(MS_SLOTS).filter(k => m.slots[k].connected && m.slots[k].g && m.slots[k].flat < 0.8).map(k => MS_SLOTS[k].label);
-    const lost = Object.keys(MS_SLOTS).filter(k => m.slots[k].connected && !msHas(k)).map(k => MS_SLOTS[k].label);
-    $('msWarn').textContent = (bad.length ? '⚠ nicht flach seitlich: ' + bad.join(', ') + '. ' : '') + (lost.length ? '⚠ keine Daten: ' + lost.join(', ') : '');
+    const lost = msConnectedKeys().filter(k => !msHas(k)).map(k => MS_SLOTS[k].label);
+    $('msWarn').textContent = lost.length ? '⚠ keine Daten: ' + lost.join(', ') : '';
+  }
+  if (ph === 'zero') {
+    const keys = msConnectedKeys(), still = keys.every(k => msStill(k, 1.5)), has = keys.every(msHas);
+    if ($('stab')) $('stab').style.width = still ? '100%' : '30%';
+    if ($('stabTxt')) $('stabTxt').textContent = !has ? 'Warte auf Daten aller Sensoren …' : still ? 'Ruhig ✓' : 'Bewegung erkannt – ruhig halten';
+    if ($('zeroBtn')) $('zeroBtn').disabled = !(has && still);
+  }
+  if (ph === 'cal' && $('calBar')) {
+    $('calBar').style.width = Math.min(100, (m.calProgress || 0) / 20 * 100) + '%';
+    $('calTxt').textContent = 'Anheben: ' + r0(m.calProgress || 0) + '° von 20°';
   }
   if ($('live')) {
-    const v = m.osg == null ? null : (ph === 'pf' ? -m.osg : m.osg);
-    $('live').innerHTML = (v == null ? '–' : r0(v)) + '<sup>°</sup>';
-    $('peak').textContent = 'Max ' + (S.peak == null ? '–' : r0(S.peak) + '°');
+    const v = od == null ? null : (ph === 'pf' ? -od : od);
+    $('live').innerHTML = (v == null ? '–' : !m.osgSign ? '±' + r0(Math.abs(v)) : r0(v)) + '<sup>°</sup>';
+    $('peak').textContent = !m.osgSign ? 'Fuß in Dorsalextension bewegen …' : 'Max ' + (S.peak == null ? '–' : r0(S.peak) + '°');
     $('holdBtn').disabled = S.peak == null;
     const ki = $('kneeInfo');
-    if (m.knee == null) ki.innerHTML = m.slots.thigh.connected ? 'Knie: keine Daten' : '';
+    if (kd == null) ki.innerHTML = m.slots.thigh.connected ? 'Knie: keine Daten' : '';
     else {
-      const d = m.knee - KNEE_TARGET[knee], ok = Math.abs(d) <= KNEE_TOL;
-      ki.innerHTML = `Knie <b style="color:${ok ? 'var(--gb)' : 'var(--orange)'}">${r0(m.knee)}°</b> ` +
+      const d = kd - KNEE_TARGET[knee], ok = Math.abs(d) <= KNEE_TOL;
+      ki.innerHTML = `Knie <b style="color:${ok ? 'var(--gb)' : 'var(--orange)'}">${r0(kd)}°</b> ` +
         (ok ? '✓' : d > 0 ? (knee === 'ext' ? '→ weiter strecken' : '→ weniger beugen') : '→ mehr beugen');
     }
   }
@@ -544,19 +647,28 @@ function msTick() {
 // Simulation: Oberschenkel/Unterschenkel/Fuß mit simKnee / simOsg / simTilt
 function simMulti() {
   if (window.__simMulti) return; window.__simMulti = true;
-  window.simKnee = 0; window.simOsg = 0; window.simTilt = 0;
-  let kc = 0, oc = 0;
+  window.simKnee = 0; window.simOsg = 0; window.simTilt = 0; window.simLift = 0;
+  // Jeder Sim-Sensor ist beliebig schräg montiert (feste Zufallsdrehung) → prüft Lage-Unabhängigkeit
+  const rot = (ax, ay, az) => { const [a,b,c] = [ax,ay,az].map(d => d*Math.PI/180);
+    const Rx = [[1,0,0],[0,Math.cos(a),-Math.sin(a)],[0,Math.sin(a),Math.cos(a)]];
+    const Ry = [[Math.cos(b),0,Math.sin(b)],[0,1,0],[-Math.sin(b),0,Math.cos(b)]];
+    const Rz = [[Math.cos(c),-Math.sin(c),0],[Math.sin(c),Math.cos(c),0],[0,0,1]];
+    const mul = (A,B) => A.map(r => B[0].map((_,j) => r.reduce((s,_,k) => s + r[k]*B[k][j], 0)));
+    return mul(Rz, mul(Ry, Rx)); };
+  const mount = window.simMount || { thigh: rot(35,-20,10), shank: rot(-25,40,70), foot: rot(60,15,-30) };
+  let kc = 0, oc = 0, lc = 0;
   setInterval(() => {
     if (!S.ms) return;
-    kc += (simKnee - kc) * 0.2; oc += (simOsg - oc) * 0.2;
-    const n = () => (Math.random() - .5) * 0.01;
-    const acc = phi => { const r = phi * Math.PI/180; return [Math.cos(r) + n(), Math.sin(r) + n(), n() * 3].map(x => x * 2048); };
-    const pT = 20 + simTilt, pS = pT + kc, pF = pS + 90 + oc;
-    const shake = r => window.simShake === r ? (Math.random() - .5) * 60 : 0;
+    kc += (simKnee - kc) * 0.2; oc += (simOsg - oc) * 0.2; lc += (simLift - lc) * 0.2;
+    const n = () => (Math.random() - .5) * 0.02;                // Rauschen ±1 % g
+    const pT = 20 + simTilt + lc, pS = pT + kc, pF = pS + 90 + oc;
     const P = { thigh: pT, shank: pS, foot: pF };
+    const shake = r => window.simShake === r ? (Math.random() - .5) * 60 : 0;
     for (const k of ['thigh','foot','shank']) {        // Unterschenkel zuletzt (löst Berechnung aus)
       const s = S.ms.slots[k]; if (!s.connected) continue;
-      const r = s.dev.simRole; msOnAngles(k, { X:0, Y:0, Z:0, acc: acc(P[r] + shake(r)) });
+      const r = s.dev.simRole, ph = (P[r] + shake(r)) * Math.PI/180, M = mount[r];
+      const gs = [Math.cos(ph), Math.sin(ph), 0], gb = M.map(row => row[0]*gs[0] + row[1]*gs[1] + row[2]*gs[2]);
+      msOnAngles(k, { X:0, Y:0, Z:0, acc: gb.map(x => (x + n()) * 2048) });
     }
   }, 50);
 }
