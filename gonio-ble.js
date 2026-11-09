@@ -19,6 +19,9 @@
 
   const SVC    = '0000ffe5-0000-1000-8000-00805f9a34fb';
   const NOTIFY = '0000ffe4-0000-1000-8000-00805f9a34fb';
+  const WRITE  = '0000ffe9-0000-1000-8000-00805f9a34fb';
+  const REG_VOLTAGE = 0x64;                              // Batteriespannung in 1/100 V
+  const CMD_READ_VOLT = [0xff, 0xaa, 0x27, REG_VOLTAGE, 0x00];
   const NAME_PREFIX = 'WT';
 
   function createSensor() {
@@ -52,7 +55,8 @@
         if (type === 0x51) lastAcc = [raw(p, 2), raw(p, 4), raw(p, 6)];
       } else if (type === 0x71) {
         if (buffer.length < 20) break;
-        buffer.splice(0, 20);           // Register-Antwort überspringen
+        const p = buffer.splice(0, 20);  // Register-Antwort: [55][71][RegL][RegH][Wert0 … Wert7]
+        if ((p[2] | (p[3] << 8)) === REG_VOLTAGE) setBattery(raw(p, 4) / 100);
       } else {
         buffer.shift();
       }
@@ -101,6 +105,8 @@
     onAngles: null,
     onStatus: null,
     onLog: null,
+    onBattery: null,     // ({ volt, percent }) – alle 30 s
+    battery: null,
     deviceName: null,
     deviceId: null,
     connected: false,
@@ -115,11 +121,30 @@
 
   function status(state, text) { if (api.onStatus) api.onStatus(state, text); }
   function log(msg) { try { console.log('[GonioBLE]', msg); } catch (_) {} if (api.onLog) api.onLog(msg); }
+  // Akku: Spannung → Prozent (übliche LiPo-Kennlinie, wie in der WitMotion-App)
+  const VOLT_TABLE = [[3.96,100],[3.93,90],[3.87,75],[3.82,60],[3.79,50],[3.77,40],[3.73,30],[3.70,20],[3.68,15],[3.50,10],[3.40,5]];
+  function setBattery(v) {
+    if (!(v > 2 && v < 5)) return;
+    const row = VOLT_TABLE.find(([u]) => v >= u);
+    api.battery = { volt: v, percent: row ? row[1] : 0, ts: Date.now() };
+    if (api.onBattery) api.onBattery(api.battery);
+  }
+  let battTimer = null, writeFn = null;
+  function startBatteryPolling(fn) {
+    writeFn = fn; clearInterval(battTimer);
+    const ask = () => writeFn && writeFn(CMD_READ_VOLT).catch((e) => log('Akku-Abfrage fehlgeschlagen: ' + (e && e.message || e)));
+    setTimeout(ask, 1500);
+    battTimer = setInterval(ask, 30000);
+  }
+  function stopBatteryPolling() { clearInterval(battTimer); battTimer = null; writeFn = null; }
+  api.readBattery = () => writeFn ? writeFn(CMD_READ_VOLT) : Promise.resolve();
+
   function emit(bytes) {
     const a = feed(toBytes(bytes));
     if (a && api.onAngles) api.onAngles(a);
   }
   function onLost() {
+    stopBatteryPolling();
     api.connected = false;
     buffer.length = 0;
     status('err', 'Getrennt');
@@ -163,6 +188,8 @@
     const key = 'notification|' + nativeDeviceId + '|' + SVC + '|' + NOTIFY;
     nativeListeners.push(await BLE.addListener(key, (r) => emit(r && r.value)));
     await BLE.startNotifications({ deviceId: nativeDeviceId, service: SVC, characteristic: NOTIFY });
+    const hex = (b) => b.map((x) => x.toString(16).padStart(2, '0')).join(' ');
+    startBatteryPolling((cmd) => BLE.write({ deviceId: nativeDeviceId, service: SVC, characteristic: WRITE, value: hex(cmd) }));
   }
 
   // Web Bluetooth
@@ -203,12 +230,14 @@
       }
     }
 
-    let ch = null;
+    let ch = null, wch = null;
     try {
       log('Service ' + SVC.slice(4, 8) + ' suchen…');
       const svc = await withTimeout(server.getPrimaryService(SVC), 8000, 'Service');
       ch = await withTimeout(svc.getCharacteristic(NOTIFY), 8000, 'Characteristic');
       log('Notify-Kanal ffe4 gefunden');
+      try { wch = await withTimeout(svc.getCharacteristic(WRITE), 5000, 'Schreib-Kanal'); }
+      catch (e) { log('Kein Schreib-Kanal ffe9 – Akku nicht abfragbar'); }
     } catch (e) {
       log('Standard-Service nicht gefunden (' + e.message + ') – suche alle Services…');
       const svcs = await withTimeout(server.getPrimaryServices(), 8000, 'Services');
@@ -235,9 +264,12 @@
     log('Bereit – warte auf Daten');
     setTimeout(() => { if (first) log('Nach 3 s keine Daten vom Sensor. Sensor eingeschaltet? Nicht mit WitMotion-App verbunden?'); }, 3000);
     api.deviceName = webDevice.name || 'WitMotion';
+    if (wch) startBatteryPolling((cmd) => (wch.writeValueWithoutResponse
+      ? wch.writeValueWithoutResponse(new Uint8Array(cmd)) : wch.writeValue(new Uint8Array(cmd))));
   }
 
   async function disconnect() {
+    stopBatteryPolling();
     try {
       const BLE = nativePlugin();
       if (BLE && nativeDeviceId) {
@@ -249,7 +281,7 @@
       if (webDevice && webDevice.gatt.connected) webDevice.gatt.disconnect();
     } finally {
       api.connected = false;
-      api.deviceId = null; api.deviceName = null;
+      api.deviceId = null; api.deviceName = null; api.battery = null;
       buffer.length = 0;
       status('idle', 'Nicht verbunden');
     }

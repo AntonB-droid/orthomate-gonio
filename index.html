@@ -101,7 +101,7 @@
   </details>
 </div>
 
-<script src="gonio-ble.js?v=7"></script>
+<script src="gonio-ble.js?v=8"></script>
 <script>
 // ── Gelenk-Definitionen (Neutral-Null-Methode) ─────────────────────────────
 const JOINTS = {
@@ -294,11 +294,23 @@ function bindSlot(k) {
   const s = S.ms.slots[k], dev = s.dev;
   dev.onAngles = a => msOnAngles(k, a);
   dev.onLog = m => log('Sensor ' + (dev.shortId ? dev.shortId() : '') + ': ' + m);
+  dev.onBattery = b => { log('Akku ' + MS_SLOTS[k].label + ': ' + b.volt.toFixed(2) + ' V (' + b.percent + ' %)'); if (MS_PHASES[S.ms.i][1] === 'assign') render(); else msTick(); };
   dev.onStatus = (state, text) => {
     s.connected = state === 'on'; s.status = text;
     if (state !== 'on') { S.ms.identified = {}; S.ms.ident = null; }   // Zuordnung neu nötig
     render();
   };
+}
+function battTxt(b) {
+  if (!b) return '';
+  return `<span style="color:${b.percent <= 20 ? 'var(--orange)' : 'inherit'}">Akku ${b.percent} %${b.percent <= 20 ? ' – bald laden' : ''}</span>`;
+}
+function msBattLine() {
+  const parts = msConnectedKeys().filter(k => S.ms.slots[k].dev.battery).map(k => {
+    const b = S.ms.slots[k].dev.battery;
+    return `<span style="color:${b.percent <= 20 ? 'var(--orange)' : 'inherit'}">${MS_SLOTS[k].label} ${b.percent} %</span>`;
+  });
+  return parts.length ? 'Akku: ' + parts.join(' · ') : '';
 }
 function msConnectedKeys() { return MS_FILL.filter(k => S.ms.slots[k].connected); }
 function msAdd() {                                 // nächsten freien Platz verbinden
@@ -352,7 +364,9 @@ async function msConnect(k) {
     const used = MS_FILL.filter(o => S.ms.slots[o].connected).map(o => S.ms.slots[o].dev.simRole);
     s.dev.simRole = (window.simOrder || ['foot','thigh','shank']).find(r => !used.includes(r));   // absichtlich „falsch“ verbunden
     s.dev.deviceId = 'SIM-' + s.dev.simRole; s.dev.shortId = () => s.dev.simRole.slice(0,4).toUpperCase();
-    s.connected = true; s.status = 'Sim-Sensor'; simMulti(); return render();
+    s.connected = true; s.status = 'Sim-Sensor';
+    s.dev.battery = { volt: 3.9, percent: { shank: 75, foot: 15, thigh: 90 }[s.dev.simRole], ts: Date.now() };
+    simMulti(); return render();
   }
   if (s.dev.connected) return s.dev.disconnect();
   if (s.busy) return;
@@ -547,7 +561,7 @@ function renderMulti() {
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span>${r ? '✓ ' + MS_SLOTS[r].label : 'Sensor ' + (MS_FILL.indexOf(k) + 1)}</span>
           <button class="chip" onclick="msRemove('${k}')">trennen</button></div>
-        <small>${s.status}${s.dev.deviceId ? ' · ID ' + s.dev.shortId() : ''}</small>
+        <small>${s.status}${s.dev.deviceId ? ' · ID ' + s.dev.shortId() : ''}${s.dev.battery ? ' · ' + battTxt(s.dev.battery) : ''}</small>
         <div class="stab" style="margin-top:8px"><div id="mot_${k}"></div></div></div>`;
     };
     const prompt = id && !done ? `<div class="result" style="border-color:var(--orange)">
@@ -615,11 +629,13 @@ function renderMulti() {
       <button class="btn" onclick="msAccept(true)">Übernehmen → OSG ${S.side === 'links' ? 'rechts' : 'links'}</button>
       <button class="btn ghost" onclick="msAccept(false)">Übernehmen → fertig</button>`;
   }
+  if (ph !== 'assign') h += `<div class="sub" id="msBatt" style="text-align:center"></div>`;
   $('screen').innerHTML = h;
   msTick();
 }
 function msTick() {
   const m = S.ms; if (!m) return;
+  if ($('msBatt')) $('msBatt').innerHTML = msBattLine();
   const [knee, ph] = MS_PHASES[m.i];
   for (const k of MS_FILL) if ($('mot_' + k)) $('mot_' + k).style.width = Math.min(100, m.slots[k].motion * 4) + '%';
   const kd = shown('knee', m.knee), od = shown('osg', m.osg);
@@ -894,11 +910,15 @@ GonioBLE.onAngles = onAngles;
 GonioBLE.onLog = log;
 function mainStatus(state, text) {
   $('connDot').className = 'dot' + (state === 'on' ? ' on' : state === 'err' ? ' err' : '');
-  $('connTxt').textContent = state === 'on' ? text : state === 'idle' ? 'Sensor verbinden' : text;
+  $('connTxt').innerHTML = state === 'on' ? text + (GonioBLE.battery ? ' · ' + battTxt(GonioBLE.battery) : '') : state === 'idle' ? 'Sensor verbinden' : text;
   if (state === 'err' && !GonioBLE.connected) S.g = null;
   render();
 }
 GonioBLE.onStatus = mainStatus;
+GonioBLE.onBattery = b => {
+  log('Akku: ' + b.volt.toFixed(2) + ' V (' + b.percent + ' %)');
+  if (GonioBLE.connected && !S.ms) $('connTxt').innerHTML = (GonioBLE.deviceName || 'Verbunden') + ' · ' + battTxt(b);
+};
 // Gelenk/Option antippen: Auswahl setzen und – falls noch kein Sensor verbunden ist –
 // direkt das Bluetooth-Fenster öffnen (muss synchron im Tipp passieren).
 function selectJoint(k) {
