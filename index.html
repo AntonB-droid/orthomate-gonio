@@ -101,7 +101,7 @@
   </details>
 </div>
 
-<script src="gonio-ble.js?v=5"></script>
+<script src="gonio-ble.js?v=6"></script>
 <script>
 // ── Gelenk-Definitionen (Neutral-Null-Methode) ─────────────────────────────
 const JOINTS = {
@@ -306,7 +306,10 @@ async function msConnect(k) {
   if (s.dev.connected) return s.dev.disconnect();
   if (s.busy) return;
   s.busy = true;
-  try { await s.dev.connect(); } catch (e) { log(MS_SLOTS[k].label + ': ' + (e && e.message || e)); }
+  // Sensoren anderer Felder (und den Haupt-Sensor) ausschließen – kein Sensor doppelt
+  const exclude = Object.keys(S.ms.slots).filter(o => o !== k && S.ms.slots[o].dev.connected)
+    .map(o => ({ id: S.ms.slots[o].dev.deviceId, name: S.ms.slots[o].dev.deviceName }));
+  try { await s.dev.connect({ exclude }); } catch (e) { log(MS_SLOTS[k].label + ': ' + (e && e.message || e)); }
   finally { s.busy = false; }
 }
 

@@ -102,6 +102,7 @@
     onStatus: null,
     onLog: null,
     deviceName: null,
+    deviceId: null,
     connected: false,
     platform,
     parse: feed,          // für Tests
@@ -124,12 +125,14 @@
     status('err', 'Getrennt');
   }
 
-  async function connect() {
+  // opts.exclude = [{ id, name }] – Sensoren, die schon anderweitig verbunden sind
+  async function connect(opts) {
     const p = platform();
+    const exclude = (opts && opts.exclude) || [];
     status('search', 'Suche…');
     try {
-      if (p === 'native') await connectNative();
-      else if (p === 'web') await connectWeb();
+      if (p === 'native') await connectNative(exclude);
+      else if (p === 'web') await connectWeb(exclude);
       else throw new Error(noBleHint());
       api.connected = true;
       status('on', api.deviceName || 'Verbunden');
@@ -141,11 +144,16 @@
   }
 
   // Native (iOS-App / Android-App)
-  async function connectNative() {
+  function isExcluded(exclude, id, name) {
+    return exclude.some((e) => (e.id && e.id === id) || (e.name && name && e.name === name));
+  }
+  async function connectNative(exclude) {
     const BLE = nativePlugin();
     await BLE.initialize();
     const dev = await BLE.requestDevice({ namePrefix: NAME_PREFIX, optionalServices: [SVC] });
+    if (isExcluded(exclude, dev.deviceId, dev.name)) throw new Error((dev.name || 'Sensor') + ' ist schon zugeordnet – bitte einen anderen wählen');
     nativeDeviceId = dev.deviceId;
+    api.deviceId = dev.deviceId;
     api.deviceName = dev.name || 'WitMotion';
 
     nativeListeners.push(await BLE.addListener('disconnected|' + nativeDeviceId, onLost));
@@ -169,12 +177,19 @@
     ]);
   }
 
-  async function connectWeb() {
+  async function connectWeb(exclude) {
     log('Gerätewahl öffnen…');
-    webDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: NAME_PREFIX }],
-      optionalServices: [SVC, ...EXTRA_SVCS],
-    });
+    const opts = { filters: [{ namePrefix: NAME_PREFIX }], optionalServices: [SVC, ...EXTRA_SVCS] };
+    const names = exclude.map((e) => e.name).filter(Boolean);
+    let dev;
+    if (names.length) {
+      // Bereits zugeordnete Sensoren in der Auswahl ausblenden (nicht jeder Browser kann das)
+      try { dev = await navigator.bluetooth.requestDevice({ ...opts, exclusionFilters: names.map((name) => ({ name })) }); }
+      catch (e) { if (e && e.name === 'TypeError') dev = await navigator.bluetooth.requestDevice(opts); else throw e; }
+    } else dev = await navigator.bluetooth.requestDevice(opts);
+    if (isExcluded(exclude, dev.id, dev.name)) throw new Error((dev.name || 'Sensor') + ' ist schon zugeordnet – bitte einen anderen wählen');
+    webDevice = dev;
+    api.deviceId = dev.id;
     log('Gewählt: ' + (webDevice.name || '?') + ' (' + webDevice.id + ')');
     webDevice.addEventListener('gattserverdisconnected', () => { log('Verbindung getrennt (gattserverdisconnected)'); onLost(); });
 
@@ -239,6 +254,7 @@
       if (webDevice && webDevice.gatt.connected) webDevice.gatt.disconnect();
     } finally {
       api.connected = false;
+      api.deviceId = null; api.deviceName = null;
       buffer.length = 0;
       status('idle', 'Nicht verbunden');
     }
