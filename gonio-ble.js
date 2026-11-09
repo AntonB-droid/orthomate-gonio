@@ -10,6 +10,9 @@
  *   await GonioBLE.connect();
  *   await GonioBLE.disconnect();
  *   GonioBLE.platform()  → 'native' | 'web' | 'none'
+ *
+ * Mehrere Sensoren gleichzeitig:
+ *   const s2 = GonioBLE.create();   // eigene Instanz, gleiche API (onAngles, connect …)
  */
 (function (global) {
   'use strict';
@@ -18,6 +21,7 @@
   const NOTIFY = '0000ffe4-0000-1000-8000-00805f9a34fb';
   const NAME_PREFIX = 'WT';
 
+  function createSensor() {
   // ── Paket-Parser ───────────────────────────────────────────────────────────
   // BLE-5.0-Sensoren (WT9011DCL, WT901BLE…) senden standardmäßig 0x55 0x61:
   //   [55][61][AccX][AccY][AccZ][GyrX][GyrY][GyrZ][Roll][Pitch][Yaw]  = 20 Byte, int16 LE
@@ -240,6 +244,11 @@
     }
   }
 
+  api.noBleHint = noBleHint;
+  api.create = createSensor;
+  return api;
+  }
+
   function noBleHint() {
     const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -247,8 +256,8 @@
       ? 'Safari kann kein Bluetooth. Bitte die OrthoMate-App öffnen (oder vorübergehend Bluefy).'
       : 'Dieser Browser kann kein Bluetooth. Bitte Chrome oder Edge verwenden.';
   }
-  api.noBleHint = noBleHint;
 
+  const api = createSensor();          // Standard-Sensor (Abwärtskompatibilität)
   global.GonioBLE = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

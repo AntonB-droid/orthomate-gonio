@@ -101,7 +101,7 @@
   </details>
 </div>
 
-<script src="gonio-ble.js?v=4"></script>
+<script src="gonio-ble.js?v=5"></script>
 <script>
 // ── Gelenk-Definitionen (Neutral-Null-Methode) ─────────────────────────────
 const JOINTS = {
@@ -120,6 +120,7 @@ const JOINTS = {
   Feder: { name:'Carbonfeder', title:'Carbonfeder', sub:'Auslenkung nach vorne', a:'Auslenkung', single:true,
            place:'Sensor <b>flach auf den Rücken der Feder</b> (hinten) kleben/clippen. <b>Feder unten fest einspannen</b> bzw. Fuß/Basis fixieren.',
            neutral:'Feder unbelastet in Ausgangsstellung, nicht berühren.' },
+  OSGM:  { name:'OSG', title:'OSG + Knie', sub:'2–3 Sensoren, Knie live', a:'Dorsalextension', b:'Plantarflexion', multi:true },
   OSGK:  { name:'OSG', title:'OSG gestr./gebeugt', sub:'DE/PF Knie gestreckt + gebeugt', a:'Dorsalextension', b:'Plantarflexion', silf:true },
 };
 
@@ -259,6 +260,231 @@ function svAccept(nextSideToo) {
   S.sv = null;
   if (nextSideToo) { S.side = S.side === 'links' ? 'rechts' : 'links'; go(1); } else { S.joint = null; go(0); }
 }
+// ── Modus „OSG + Knie“ mit 2–3 Sensoren ───────────────────────────────────
+// Alle Sensoren FLACH SEITLICH (lateral), markierte Kante zeigt nach distal
+// (Oberschenkel → Knie, Unterschenkel → Fuß, Fuß → Zehen).
+// Knie = Winkel Oberschenkel↔Unterschenkel, OSG = Winkel Unterschenkel↔Fuß − 90°.
+// Der Unterschenkel darf sich bewegen – gemessen wird immer relativ.
+const MS_SLOTS = {
+  thigh: { label:'Oberschenkel', where:'lateral am Oberschenkel, Kante → Knie', optional:true },
+  shank: { label:'Unterschenkel', where:'lateral am Unterschenkel, Kante → Fuß' },
+  foot:  { label:'Fuß', where:'Fußaußenkante (Ferse → Kleinzehenballen), Kante → Zehen' },
+};
+const MS_PHASES = [[null,'assign'],[null,'place'],['ext','de'],['ext','pf'],['flex','de'],['flex','pf'],[null,'res']];
+const KNEE_TARGET = { ext:0, flex:90 }, KNEE_TOL = 7;
+const KNEE_POS = {
+  ext:  'Knie <b>gestreckt</b> (Ziel 0°). Rückenlage oder Langsitz.',
+  flex: 'Knie <b>90° gebeugt</b>. Sitzend an der Liegenkante, Unterschenkel hängt.',
+};
+
+function msStart() {
+  const slots = {};
+  for (const k of Object.keys(MS_SLOTS)) {
+    // Ist der Standard-Sensor schon verbunden, wird er als Unterschenkel-Sensor übernommen.
+    const dev = (k === 'shank' && GonioBLE.connected) ? GonioBLE : GonioBLE.create();
+    slots[k] = { dev, g:null, phi:0, flat:1, src:null, last:0, motion:0, connected: dev.connected, status: dev.connected ? (dev.deviceName || 'Verbunden') : '' };
+    dev.onAngles = a => msOnAngles(k, a);
+    dev.onLog = m => log(MS_SLOTS[k].label + ': ' + m);
+    dev.onStatus = (state, text) => { slots[k].connected = state === 'on'; slots[k].status = text; render(); };
+  }
+  S.ms = { i:0, slots, kneeOff:0, val:{ ext:{}, flex:{} }, knee:null, osg:null };
+  msGo(0);
+}
+function msStop() {
+  if (!S.ms) return;
+  for (const s of Object.values(S.ms.slots)) {
+    if (s.dev === GonioBLE) { GonioBLE.onAngles = onAngles; GonioBLE.onLog = log; GonioBLE.onStatus = mainStatus; }
+    else if (s.dev.connected) s.dev.disconnect();
+  }
+  S.ms = null;
+}
+function msGo(i) { S.ms.i = i; S.peak = null; S.peakKnee = null; S.hist = []; render(); }
+
+async function msConnect(k) {
+  const s = S.ms.slots[k];
+  if (SIM) { s.connected = true; s.status = 'Sim ' + MS_SLOTS[k].label; simMulti(); return render(); }
+  if (s.dev.connected) return s.dev.disconnect();
+  if (s.busy) return;
+  s.busy = true;
+  try { await s.dev.connect(); } catch (e) { log(MS_SLOTS[k].label + ': ' + (e && e.message || e)); }
+  finally { s.busy = false; }
+}
+
+function gravityFrom(a) {
+  if (a.acc && len(a.acc) > 0) return [norm(a.acc), 'Beschleunigung'];
+  const r = a.X * Math.PI/180, p = a.Y * Math.PI/180;
+  return [[-Math.sin(p), Math.sin(r)*Math.cos(p), Math.cos(r)*Math.cos(p)], 'Fusion'];
+}
+function smoothG(prev, v) {
+  if (!prev) return v;
+  const d = Math.acos(Math.max(-1, Math.min(1, dot(prev, v)))) * 180/Math.PI;
+  const k = Math.max(0.1, Math.min(0.6, d / 2));
+  return norm(prev.map((x,i) => x + k*(v[i]-x)));
+}
+const wrap = d => ((d + 540) % 360) - 180;
+
+function msOnAngles(k, a) {
+  if (!S.ms) return;
+  const s = S.ms.slots[k];
+  const [v, src] = gravityFrom(a);
+  if (src !== s.src) { s.src = src; s.g = null; }
+  const prev = s.g;
+  s.g = smoothG(s.g, v);
+  if (prev) s.motion = 0.8 * s.motion + 0.2 * Math.acos(Math.max(-1, Math.min(1, dot(prev, s.g)))) * 180/Math.PI * 10;
+  s.phi = Math.atan2(s.g[1], s.g[0]) * 180/Math.PI;
+  s.flat = Math.sqrt(Math.max(0, 1 - s.g[2]*s.g[2]));
+  s.last = performance.now();
+  if (k === 'shank') msUpdate();      // einmal pro Unterschenkel-Paket rechnen
+}
+function msHas(k) { const s = S.ms.slots[k]; return s.connected && s.g && performance.now() - s.last < 1500; }
+
+function msUpdate() {
+  const m = S.ms, sl = m.slots;
+  m.knee = msHas('thigh') && msHas('shank') ? Math.abs(wrap(sl.shank.phi - sl.thigh.phi)) - m.kneeOff : null;
+  m.osg  = msHas('shank') && msHas('foot')  ? Math.abs(wrap(sl.foot.phi - sl.shank.phi)) - 90 : null;
+
+  const [knee, ph] = MS_PHASES[m.i];
+  if ((ph === 'de' || ph === 'pf') && m.osg != null) {
+    const v = ph === 'de' ? m.osg : -m.osg;
+    // Zählen erst, wenn das Knie ≥ 0,5 s im Zielbereich steht (nicht beim Durchlaufen)
+    const inTol = m.knee == null || Math.abs(m.knee - KNEE_TARGET[knee]) <= KNEE_TOL;
+    if (!inTol) m.kneeOkSince = null; else if (m.kneeOkSince == null) m.kneeOkSince = performance.now();
+    const kneeOk = m.knee == null || (inTol && performance.now() - m.kneeOkSince >= 500);
+    if (kneeOk && (S.peak == null || v > S.peak)) { S.peak = v; S.peakKnee = m.knee; }
+  }
+  const now = performance.now();
+  S.hist.push([now, m.osg ?? 0]);
+  while (S.hist.length && now - S.hist[0][0] > 1200) S.hist.shift();
+  msTick();
+}
+function msKneeZero() { if (S.ms.knee != null) { S.ms.kneeOff += S.ms.knee; log('Knie-Null gesetzt (Offset ' + S.ms.kneeOff.toFixed(1) + '°)'); } }
+function msHold() {
+  const [knee, ph] = MS_PHASES[S.ms.i];
+  S.ms.val[knee][ph] = r0(S.peak ?? 0);
+  S.ms.val[knee][ph + 'Knee'] = S.peakKnee == null ? null : r0(S.peakKnee);
+  msGo(S.ms.i + 1);
+}
+function msAccept(nextSide) {
+  const v = S.ms.val, list = [];
+  for (const k of ['ext','flex']) {
+    const res = { type:'rom', joint:'OSG (' + KNEE[k].label + ')', side:S.side, motionA:'Dorsalextension', motionB:'Plantarflexion',
+                  a:v[k].de, b:v[k].pf, notation:notation(v[k].de, v[k].pf), knee:k,
+                  kneeAngleDE:v[k].deKnee, kneeAnglePF:v[k].pfKnee, sensors:'multi', ts:Date.now() };
+    S.results = S.results.filter(r => !(r.joint === res.joint && r.side === res.side));
+    S.results.push(res); list.push(res);
+  }
+  const msg = { type:'rom-silfverskiold', side:S.side, extended:list[0], flexed:list[1], deDiff:v.flex.de - v.ext.de, sensors:'multi', ts:Date.now() };
+  window.dispatchEvent(new CustomEvent('gonioROM', { detail:msg }));
+  try { if (parent !== window) parent.postMessage(msg, '*'); } catch(_) {}
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+  log('Übernommen (Multi): OSG ' + S.side + ' gestreckt ' + list[0].notation + ' / gebeugt ' + list[1].notation);
+  if (nextSide) {                          // Sensoren bleiben verbunden, nur Seite wechseln
+    S.side = S.side === 'links' ? 'rechts' : 'links';
+    S.ms.val = { ext:{}, flex:{} }; S.ms.kneeOff = 0; msGo(1);
+  } else { msStop(); S.joint = null; go(0); }
+}
+
+function renderMulti() {
+  const m = S.ms, [knee, ph] = MS_PHASES[m.i];
+  stepBar(MS_PHASES.length, m.i);
+  const back = m.i === 0 ? 'msStop();go(0)' : `msGo(${m.i - 1})`;
+  const live = `<div class="row" style="text-align:center">
+      <div class="result" style="padding:10px"><div class="sub">Knie</div><div class="nn" style="font-size:34px" id="msKnee">–</div></div>
+      <div class="result" style="padding:10px"><div class="sub">OSG</div><div class="nn" style="font-size:34px" id="msOsg">–</div></div></div>`;
+  let h = '';
+  if (ph === 'assign') {
+    h = `<div class="kicker">OSG + Knie · ${S.side}</div><h1>Sensoren zuordnen</h1>
+      <div class="hint">Je Feld antippen und den passenden Sensor wählen. Zum Prüfen den Sensor kurz bewegen – sein Balken schlägt aus. Oberschenkel ist optional (dann ohne Knie-Kontrolle).</div>
+      <div class="rlist">${Object.keys(MS_SLOTS).map(k => {
+        const s = m.slots[k], c = MS_SLOTS[k];
+        return `<button class="opt ${s.connected ? 'active' : ''}" onclick="msConnect('${k}')">${c.label}${c.optional ? ' <small style="display:inline">(optional)</small>' : ''}
+          <small>${s.connected ? '✓ ' + s.status : (s.status || 'antippen zum Verbinden')}</small>
+          <div class="stab" style="margin-top:8px"><div id="mot_${k}"></div></div></button>`; }).join('')}</div>
+      <div style="flex:1"></div>
+      <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
+      <button class="btn" ${m.slots.shank.connected && m.slots.foot.connected ? '' : 'disabled'} onclick="msGo(1)">Weiter →</button></div>`;
+  } else if (ph === 'place') {
+    h = `<div class="kicker">OSG + Knie · ${S.side}</div><h1>Sensoren anlegen</h1>
+      <div class="hint">Alle Sensoren <b>flach seitlich (lateral)</b>, markierte Kante zeigt <b>nach distal</b>:<br>
+        ${Object.keys(MS_SLOTS).filter(k => m.slots[k].connected).map(k => `• <b>${MS_SLOTS[k].label}</b>: ${MS_SLOTS[k].where}`).join('<br>')}</div>
+      ${live}
+      <div class="sub" id="msWarn" style="color:var(--orange)"></div>
+      ${m.slots.thigh.connected ? `<button class="btn ghost" onclick="msKneeZero()">Knie steht gerade → Knie = 0° setzen</button>` : ''}
+      <div style="flex:1"></div>
+      <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button><button class="btn" onclick="msGo(2)">Messen →</button></div>`;
+  } else if (ph === 'de' || ph === 'pf') {
+    const de = ph === 'de', mo = de ? 'Dorsalextension' : 'Plantarflexion';
+    h = `<div class="kicker">OSG ${S.side} · ${KNEE[knee].label}</div><h1>${mo}</h1>
+      <div class="hint">${KNEE_POS[knee]} Fuß in <b>${mo}</b> bis zum Anschlag bewegen und halten.
+        ${m.slots.thigh.connected ? `<br>Gezählt wird nur, solange das Knie bei <b>${KNEE_TARGET[knee]}° ± ${KNEE_TOL}°</b> steht.` : ''}</div>
+      <div class="big"><div class="val" id="live">–<sup>°</sup></div>
+        <div class="peak" id="peak">Max –</div>
+        <div class="sub" id="kneeInfo" style="font-size:16px"></div>
+        <div class="sub" id="msWarn" style="color:var(--orange)"></div></div>
+      <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
+      <button class="btn orange" id="holdBtn" onclick="msHold()">Festhalten</button></div>`;
+  } else {
+    const v = m.val, diff = v.flex.de - v.ext.de;
+    const kn = (k, p) => v[k][p + 'Knee'] == null ? '' : ` <span style="color:var(--muted)">(Knie ${v[k][p + 'Knee']}°)</span>`;
+    const row = k => `<div class="ritem"><span>${KNEE[k].label}</span><b>${notation(v[k].de, v[k].pf)}</b></div>
+      <div class="sub" style="text-align:right;margin-top:-4px">DE ${v[k].de}°${kn(k,'de')} · PF ${v[k].pf}°${kn(k,'pf')}</div>`;
+    h = `<div class="kicker">Ergebnis · OSG ${S.side}</div><h1>Knie gestreckt / gebeugt</h1>
+      <div class="result"><div class="sub">Dorsalextension gestreckt <b>${v.ext.de}°</b> · gebeugt <b>${v.flex.de}°</b></div>
+        <div class="nn">${diff > 0 ? '+' : ''}${diff}°</div><div class="sub">Zugewinn DE bei Kniebeugung</div></div>
+      <div class="rlist">${row('ext')}${row('flex')}</div>
+      <div class="hint">${diff >= 10 ? 'Deutlich mehr DE bei gebeugtem Knie → Hinweis auf <b>Verkürzung des M. gastrocnemius</b> (Silfverskiöld positiv).'
+        : 'Kaum Unterschied → Einschränkung eher durch <b>M. soleus / Gelenk</b> (Silfverskiöld negativ).'}</div>
+      <div class="row"><button class="btn ghost" onclick="msGo(2)">Gestreckt neu</button><button class="btn ghost" onclick="msGo(4)">Gebeugt neu</button></div>
+      <div style="flex:1"></div>
+      <button class="btn" onclick="msAccept(true)">Übernehmen → OSG ${S.side === 'links' ? 'rechts' : 'links'}</button>
+      <button class="btn ghost" onclick="msAccept(false)">Übernehmen → fertig</button>`;
+  }
+  $('screen').innerHTML = h;
+  msTick();
+}
+function msTick() {
+  const m = S.ms; if (!m) return;
+  const [knee, ph] = MS_PHASES[m.i];
+  for (const k of Object.keys(MS_SLOTS)) if ($('mot_' + k)) $('mot_' + k).style.width = Math.min(100, m.slots[k].motion * 4) + '%';
+  if ($('msKnee')) $('msKnee').textContent = m.knee == null ? '–' : r0(m.knee) + '°';
+  if ($('msOsg'))  $('msOsg').textContent  = m.osg == null ? '–' : r0(m.osg) + '°';
+  if ($('msWarn')) {
+    const bad = Object.keys(MS_SLOTS).filter(k => m.slots[k].connected && m.slots[k].g && m.slots[k].flat < 0.8).map(k => MS_SLOTS[k].label);
+    const lost = Object.keys(MS_SLOTS).filter(k => m.slots[k].connected && !msHas(k)).map(k => MS_SLOTS[k].label);
+    $('msWarn').textContent = (bad.length ? '⚠ nicht flach seitlich: ' + bad.join(', ') + '. ' : '') + (lost.length ? '⚠ keine Daten: ' + lost.join(', ') : '');
+  }
+  if ($('live')) {
+    const v = m.osg == null ? null : (ph === 'pf' ? -m.osg : m.osg);
+    $('live').innerHTML = (v == null ? '–' : r0(v)) + '<sup>°</sup>';
+    $('peak').textContent = 'Max ' + (S.peak == null ? '–' : r0(S.peak) + '°');
+    $('holdBtn').disabled = S.peak == null;
+    const ki = $('kneeInfo');
+    if (m.knee == null) ki.innerHTML = m.slots.thigh.connected ? 'Knie: keine Daten' : '';
+    else {
+      const d = m.knee - KNEE_TARGET[knee], ok = Math.abs(d) <= KNEE_TOL;
+      ki.innerHTML = `Knie <b style="color:${ok ? 'var(--gb)' : 'var(--orange)'}">${r0(m.knee)}°</b> ` +
+        (ok ? '✓' : d > 0 ? (knee === 'ext' ? '→ weiter strecken' : '→ weniger beugen') : '→ mehr beugen');
+    }
+  }
+}
+
+// Simulation: Oberschenkel/Unterschenkel/Fuß mit simKnee / simOsg / simTilt
+function simMulti() {
+  if (window.__simMulti) return; window.__simMulti = true;
+  window.simKnee = 0; window.simOsg = 0; window.simTilt = 0;
+  let kc = 0, oc = 0;
+  setInterval(() => {
+    if (!S.ms) return;
+    kc += (simKnee - kc) * 0.2; oc += (simOsg - oc) * 0.2;
+    const n = () => (Math.random() - .5) * 0.01;
+    const acc = phi => { const r = phi * Math.PI/180; return [Math.cos(r) + n(), Math.sin(r) + n(), n() * 3].map(x => x * 2048); };
+    const pT = 20 + simTilt, pS = pT + kc, pF = pS + 90 + oc;
+    if (S.ms.slots.thigh.connected) msOnAngles('thigh', { X:0, Y:0, Z:0, acc: acc(pT) });
+    msOnAngles('foot', { X:0, Y:0, Z:0, acc: acc(pF) });
+    msOnAngles('shank', { X:0, Y:0, Z:0, acc: acc(pS) });
+  }, 50);
+}
+
 function stability() {             // 0..1  (1 = ruhig seit ≥1 s)
   if (S.hist.length < 3) return 0;
   const span = S.hist[S.hist.length-1][0] - S.hist[0][0];
@@ -278,7 +504,9 @@ function go(step) {
   S.step = step; S.peak = null; S.hist = [];
   if (step <= 1) { S.ref = null; S.axis = null; S.k = null; S.A = null; S.B = null; }
   if (step === 0) S.sv = null;
+  if (step === 0) msStop();
   if (step === 1 && JOINTS[S.joint].silf) return svStart();
+  if (step === 1 && JOINTS[S.joint].multi) return msStart();
   render();
 }
 function zero() {
@@ -375,6 +603,7 @@ function renderSilf() {
   tick();
 }
 function render() {
+  if (S.ms) return renderMulti();
   if (S.sv) return renderSilf();
   stepBar(5, S.step);
   const j = S.joint && JOINTS[S.joint];
@@ -389,8 +618,8 @@ function render() {
         : `<div class="grid">${['links','rechts'].map(s => `<button class="opt ${S.side===s?'active':''}" onclick="S.side='${s}';render()">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${resultsHTML()}
       <div style="flex:1"></div>
-      ${connected ? '' : '<div class="hint">Zuerst oben rechts den <b>Sensor verbinden</b>.</div>'}
-      <button class="btn" ${S.joint && (S.side || (j && j.single)) && connected ? '' : 'disabled'} onclick="go(1)">Weiter →</button>`;
+      ${connected || (j && j.multi) ? '' : '<div class="hint">Zuerst oben rechts den <b>Sensor verbinden</b>.</div>'}
+      <button class="btn" ${S.joint && (S.side || (j && j.single)) && (connected || (j && j.multi)) ? '' : 'disabled'} onclick="go(1)">Weiter →</button>`;
   }
   else if (S.step === 1) {
     h = `<div class="kicker">Schritt 2 · ${j.name} ${j.single ? (S.label||'') : S.side}</div><h1>Sensor anlegen &amp; nullen</h1>
@@ -440,6 +669,7 @@ function resultsHTML() {
     `<div class="ritem"><span>${r.joint} ${r.side}</span><b>${r.notation}</b></div>`).join('')}</div>`;
 }
 function tick() {                     // nur Live-Werte aktualisieren
+  if (S.ms) return;
   const st = stability();
   if ($('stab')) $('stab').style.width = (st*100) + '%';
   if ($('stabTxt')) $('stabTxt').textContent = !S.g ? 'Keine Sensordaten' : st > 0.8 ? 'Stabil ✓' : 'Bewegung erkannt';
@@ -463,17 +693,18 @@ function tick() {                     // nur Live-Werte aktualisieren
 // ── Verbindung ─────────────────────────────────────────────────────────────
 GonioBLE.onAngles = onAngles;
 GonioBLE.onLog = log;
-GonioBLE.onStatus = (state, text) => {
+function mainStatus(state, text) {
   $('connDot').className = 'dot' + (state === 'on' ? ' on' : state === 'err' ? ' err' : '');
   $('connTxt').textContent = state === 'on' ? text : state === 'idle' ? 'Sensor verbinden' : text;
   if (state === 'err' && !GonioBLE.connected) S.g = null;
   render();
-};
+}
+GonioBLE.onStatus = mainStatus;
 // Gelenk/Option antippen: Auswahl setzen und – falls noch kein Sensor verbunden ist –
 // direkt das Bluetooth-Fenster öffnen (muss synchron im Tipp passieren).
 function selectJoint(k) {
   S.joint = k; render();
-  if (!GonioBLE.connected && !SIM && GonioBLE.platform() !== 'none') toggleConnect();
+  if (!JOINTS[k].multi && !GonioBLE.connected && !SIM && GonioBLE.platform() !== 'none') toggleConnect();
 }
 async function toggleConnect() {
   if (GonioBLE.connected) return GonioBLE.disconnect();
