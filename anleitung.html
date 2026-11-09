@@ -67,75 +67,44 @@ const hasBLE = !!(navigator.bluetooth);                 // in Bluefy vorhanden, 
 const BT = `<svg width="70" height="70" viewBox="0 0 70 70"><circle cx="35" cy="35" r="35" fill="#2f7fe6"/>
   <path d="M27 24l16 13-8 7V18l8 7-16 13" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const BLUEFY = `<div class="appicon">${BT.replace('fill="#2f7fe6"', 'fill="none"')}</div>`;
-const SENSOR = `<svg width="150" height="110" viewBox="0 0 150 110"><rect x="25" y="15" width="100" height="80" rx="16" fill="#1d2433" stroke="#4a5570" stroke-width="3"/>
-  <circle cx="75" cy="55" r="9" fill="#2db84a"><animate attributeName="opacity" values="1;.2;1" dur="1.2s" repeatCount="indefinite"/></circle>
-  <rect x="62" y="6" width="26" height="12" rx="4" fill="#4a5570"/></svg>`;
 
 const STEPS = [
-  { id:'start', title:'Hallo!', html: () => `
-      <p class="say">Wir machen das <b>zusammen</b>.<br>Du musst <b>nichts schreiben</b>.<br>Nur antippen.</p>
-      <div class="pic">${SENSOR}<div class="small">Das ist der Sensor.<br>Er misst Winkel am Bein.</div></div>
-      <div class="spacer"></div>
-      <button class="btn" onclick="next()">Los geht's →</button>` },
-
-  { id:'bt', title:'Bluetooth an', html: () => `
-      <p class="say">Wische vom <b>oberen rechten Rand</b> nach <b>unten</b>.</p>
-      <div class="pic"><div class="tap">${BT}</div><div class="small">Ist dieses Zeichen <b style="color:#2f7fe6">blau</b>? Super!<br>Ist es grau? Einmal antippen.</div></div>
-      <p class="say">Dann wieder <b>nach oben wischen</b>.</p>
-      <div class="spacer"></div>
-      <button class="btn" onclick="next()">Ist blau ✓</button>` },
-
-  { id:'store', title:'Blaue App holen', html: () => `
-      <p class="say">Wir brauchen die App <b>Bluefy</b>.<br>Tippe auf den blauen Knopf.</p>
+  { id:'store', title:'Bluefy holen', html: () => `
+      <p class="say">Für die Mess-App brauchst du die App <b>Bluefy</b>.<br>Tippe auf den blauen Knopf.</p>
       <div class="pic"><div class="fake">${BLUEFY}<div><b style="font-size:19px">Bluefy</b><br><span class="small">Web BLE Browser</span></div></div>
         <div class="fake"><span class="tap"><span class="pill" style="background:#2f7fe6">Laden</span></span></div>
-        <div class="small">Im App Store auf <b>„Laden“</b> tippen<br>(oder auf die Wolke ☁).<br>Vielleicht fragt das iPhone nach Face ID – einfach reinschauen.</div></div>
-      <a class="btn blue" href="${STORE_URL}" onclick="setTimeout(next, 800)">Bluefy holen</a>
-      <button class="btn ghost" onclick="next()">Hab ich schon →</button>` },
+        <div class="small">Im App Store auf <b>„Laden“</b> tippen (oder auf die Wolke ☁).<br>Danach wieder <b>hierher</b> zurück.</div></div>
+      <div class="spacer"></div>
+      <a class="btn blue" href="${STORE_URL}" onclick="setTimeout(next, 800)">Bluefy im App Store</a>
+      <button class="btn ghost" onclick="next()">Bluefy habe ich schon →</button>` },
 
-  { id:'copy', title:'Zurück hier?', html: () => `
-      <p class="say">Toll! Jetzt <b>merken</b> wir uns den Weg.<br>Tippe auf den grünen Knopf.</p>
+  { id:'copy', title:'Weg merken', html: () => `
+      <p class="say">Jetzt merkt sich das iPhone den Weg zur Mess-App.<br>Tippe auf den grünen Knopf.</p>
       <div class="spacer"></div>
       <button class="btn" id="copyBtn" onclick="copyLink()">Weg merken</button>
       <div class="ok" id="copyOk"></div>` },
 
   { id:'open', title:'In Bluefy öffnen', html: () => `
-      <p class="say"><b>1.</b> Öffne die blaue App <b>Bluefy</b>.</p>
+      <p class="say"><b>1.</b> Öffne die App <b>Bluefy</b>.</p>
       <div class="pic" style="padding:14px">${BLUEFY}</div>
       <p class="say"><b>2.</b> Tippe <b>oben</b> auf das lange Feld.</p>
       <div class="pic" style="padding:14px"><div class="bar tap"><span style="color:#999">Suchen oder Adresse</span></div></div>
       <p class="say"><b>3.</b> Tippe auf <b>„Einsetzen“</b>.<br>Dann auf <b>„Öffnen“</b> oder die <b>blaue Taste</b> unten rechts.</p>
       <div class="pic" style="padding:14px"><span class="tap"><span class="pill">Einsetzen</span></span></div>
-      <div class="small">Fragt das iPhone „Einsetzen erlauben?“ → <b>Erlauben</b> tippen.</div>
-      <button class="btn ghost" onclick="copyLink(true)">Nochmal merken</button>
+      <div class="small">Fragt das iPhone „Einsetzen erlauben?“ → <b>Erlauben</b>.</div>
+      <button class="btn ghost" onclick="copyLink(true)">Weg nochmal merken</button>
       <div class="ok" id="copyOk"></div>` },
 ];
 
+// In Bluefy angekommen: nur noch Stern setzen, dann direkt weiter in die Mess-App
 const DONE = [
   { id:'star', title:'Geschafft!', html: () => `
-      <p class="say">Du bist in der richtigen App.<br>Jetzt einmal den <b>Stern</b> antippen.<br>Dann findest du alles wieder.</p>
+      <p class="say">Du bist in Bluefy.<br><b>1.</b> Tippe unten auf <b>„Zur Mess-App“</b>.<br><b>2.</b> Dort einmal auf den <b>Stern</b> tippen.<br>Dann findest du die Mess-App immer wieder.</p>
       <div class="pic" style="padding:14px"><div class="bar"><span>antonb-droid.github.io</span><span class="tap" style="font-size:26px">☆</span></div>
         <div class="small">Der Stern ist <b>unten rechts</b> neben der Adresse.</div></div>
       <div class="spacer"></div>
-      <button class="btn" onclick="next()">Stern ist an ✓</button>` },
-
-  { id:'sensor', title:'Sensor an', html: () => `
-      <p class="say">Drück am Sensor auf den <b>Knopf</b>.<br>Ein <b>Licht</b> blinkt? Prima!</p>
-      <div class="pic">${SENSOR}</div>
-      <p class="say">Wenn das iPhone fragt:<br>„Bluetooth erlauben?“ → <b>Erlauben</b>.</p>
-      <div class="spacer"></div>
-      <button class="btn" onclick="next()">Licht blinkt ✓</button>` },
-
-  { id:'go', title:'Los geht\'s!', html: () => `
-      <p class="say">Jetzt kannst du messen.</p>
-      <div class="pic"><div class="small" style="font-size:17px;color:#c9d1e0">So geht es:<br><br>
-        <b>1.</b> Antippen, was du messen willst.<br>
-        <b>2.</b> Eine Liste geht auf.<br>
-        <b>3.</b> Den Sensor <b>WT901…</b> antippen.<br>
-        <b>4.</b> Dann sagt dir die App jeden Schritt.</div></div>
-      <div class="small">Nächstes Mal: Bluefy öffnen → <b>Stern</b> → fertig.</div>
-      <div class="spacer"></div>
-      <a class="btn" href="${APP_URL}">Messung starten →</a>` },
+      <a class="btn" href="${APP_URL}">Zur Mess-App →</a>
+      <div class="small">Nächstes Mal: Bluefy öffnen → Stern → Mess-App.</div>` },
 ];
 
 // Am Computer: QR-Code zum Abscannen mit dem iPhone
