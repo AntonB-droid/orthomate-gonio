@@ -145,13 +145,14 @@
 
   // Native (iOS-App / Android-App)
   function isExcluded(exclude, id, name) {
-    return exclude.some((e) => (e.id && e.id === id) || (e.name && name && e.name === name));
+    // Nur über die Geräte-ID: baugleiche WitMotion-Sensoren haben oft denselben Namen
+    return exclude.some((e) => e.id && e.id === id);
   }
   async function connectNative(exclude) {
     const BLE = nativePlugin();
     await BLE.initialize();
     const dev = await BLE.requestDevice({ namePrefix: NAME_PREFIX, optionalServices: [SVC] });
-    if (isExcluded(exclude, dev.deviceId, dev.name)) throw new Error((dev.name || 'Sensor') + ' ist schon zugeordnet – bitte einen anderen wählen');
+    if (isExcluded(exclude, dev.deviceId, dev.name)) throw new Error('Dieser Sensor (ID ' + shortId(dev.deviceId) + ') ist schon zugeordnet – bitte den anderen Eintrag wählen');
     nativeDeviceId = dev.deviceId;
     api.deviceId = dev.deviceId;
     api.deviceName = dev.name || 'WitMotion';
@@ -180,14 +181,8 @@
   async function connectWeb(exclude) {
     log('Gerätewahl öffnen…');
     const opts = { filters: [{ namePrefix: NAME_PREFIX }], optionalServices: [SVC, ...EXTRA_SVCS] };
-    const names = exclude.map((e) => e.name).filter(Boolean);
-    let dev;
-    if (names.length) {
-      // Bereits zugeordnete Sensoren in der Auswahl ausblenden (nicht jeder Browser kann das)
-      try { dev = await navigator.bluetooth.requestDevice({ ...opts, exclusionFilters: names.map((name) => ({ name })) }); }
-      catch (e) { if (e && e.name === 'TypeError') dev = await navigator.bluetooth.requestDevice(opts); else throw e; }
-    } else dev = await navigator.bluetooth.requestDevice(opts);
-    if (isExcluded(exclude, dev.id, dev.name)) throw new Error((dev.name || 'Sensor') + ' ist schon zugeordnet – bitte einen anderen wählen');
+    const dev = await navigator.bluetooth.requestDevice(opts);
+    if (isExcluded(exclude, dev.id, dev.name)) throw new Error('Dieser Sensor (ID ' + shortId(dev.id) + ') ist schon zugeordnet – bitte den anderen Eintrag wählen');
     webDevice = dev;
     api.deviceId = dev.id;
     log('Gewählt: ' + (webDevice.name || '?') + ' (' + webDevice.id + ')');
@@ -262,8 +257,11 @@
 
   api.noBleHint = noBleHint;
   api.create = createSensor;
+  api.shortId = () => shortId(api.deviceId);
   return api;
   }
+
+  function shortId(id) { return String(id || '').replace(/[^0-9a-z]/gi, '').slice(0, 4).toUpperCase(); }
 
   function noBleHint() {
     const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||

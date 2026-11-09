@@ -101,7 +101,7 @@
   </details>
 </div>
 
-<script src="gonio-ble.js?v=6"></script>
+<script src="gonio-ble.js?v=7"></script>
 <script>
 // ── Gelenk-Definitionen (Neutral-Null-Methode) ─────────────────────────────
 const JOINTS = {
@@ -397,11 +397,11 @@ function renderMulti() {
   let h = '';
   if (ph === 'assign') {
     h = `<div class="kicker">OSG + Knie · ${S.side}</div><h1>Sensoren zuordnen</h1>
-      <div class="hint">Je Feld antippen und den passenden Sensor wählen. Zum Prüfen den Sensor kurz bewegen – sein Balken schlägt aus. Oberschenkel ist optional (dann ohne Knie-Kontrolle).</div>
+      <div class="hint">Je Feld antippen und einen Sensor wählen. Baugleiche Sensoren heißen gleich – sie unterscheiden sich an der <b>ID unter dem Namen</b>. Für das nächste Feld den <b>anderen Eintrag</b> wählen.<br>Prüfen: Sensor kurz bewegen – der Balken im richtigen Feld schlägt aus. Oberschenkel ist optional.</div>
       <div class="rlist">${Object.keys(MS_SLOTS).map(k => {
         const s = m.slots[k], c = MS_SLOTS[k];
         return `<button class="opt ${s.connected ? 'active' : ''}" onclick="msConnect('${k}')">${c.label}${c.optional ? ' <small style="display:inline">(optional)</small>' : ''}
-          <small>${s.connected ? '✓ ' + s.status : (s.status || 'antippen zum Verbinden')}</small>
+          <small>${s.connected ? '✓ ' + s.status + (s.dev.deviceId ? ' · ID ' + s.dev.shortId() : '') : (s.status || 'antippen zum Verbinden')}</small>
           <div class="stab" style="margin-top:8px"><div id="mot_${k}"></div></div></button>`; }).join('')}</div>
       <div style="flex:1"></div>
       <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
