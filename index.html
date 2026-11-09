@@ -449,7 +449,8 @@ function msTick() {
   const m = S.ms; if (!m) return;
   const [knee, ph] = MS_PHASES[m.i];
   for (const k of Object.keys(MS_SLOTS)) if ($('mot_' + k)) $('mot_' + k).style.width = Math.min(100, m.slots[k].motion * 4) + '%';
-  if ($('msKnee')) $('msKnee').textContent = m.knee == null ? '–' : r0(m.knee) + '°';
+  if ($('msKnee')) $('msKnee').innerHTML = m.knee != null ? r0(m.knee) + '°'
+    : `<span style="font-size:13px;font-family:'DM Mono',monospace;font-weight:400;color:var(--muted)">${m.slots.thigh.connected ? 'keine Daten' : 'braucht Oberschenkel-Sensor'}</span>`;
   if ($('msOsg'))  $('msOsg').textContent  = m.osg == null ? '–' : r0(m.osg) + '°';
   if ($('msWarn')) {
     const bad = Object.keys(MS_SLOTS).filter(k => m.slots[k].connected && m.slots[k].g && m.slots[k].flat < 0.8).map(k => MS_SLOTS[k].label);
