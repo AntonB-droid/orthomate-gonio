@@ -833,7 +833,9 @@ function render() {
         : `<div class="grid">${['links','rechts'].map(s => `<button class="opt ${S.side===s?'active':''}" onclick="S.side='${s}';render()">${s[0].toUpperCase()+s.slice(1)}</button>`).join('')}</div>`}
       ${resultsHTML()}
       <div style="flex:1"></div>
-      ${connected || (j && j.multi) ? '' : '<div class="hint">Zuerst oben rechts den <b>Sensor verbinden</b>.</div>'}
+      ${GonioBLE.platform() === 'none' && !SIM
+        ? '<a class="hint" href="anleitung.html" style="display:block;text-decoration:none;border-color:var(--orange)">Dieser Browser kann kein Bluetooth. <b>Hier tippen: Anleitung fürs iPhone</b> →</a>'
+        : connected || (j && j.multi) ? '' : '<div class="hint">Zuerst oben rechts den <b>Sensor verbinden</b>.</div>'}
       <button class="btn" ${S.joint && (S.side || (j && j.single)) && (connected || (j && j.multi)) ? '' : 'disabled'} onclick="go(1)">Weiter →</button>`;
   }
   else if (S.step === 1) {
