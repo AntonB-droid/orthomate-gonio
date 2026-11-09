@@ -277,19 +277,65 @@ const KNEE_POS = {
   flex: 'Knie <b>90° gebeugt</b>. Sitzend an der Liegenkante, Unterschenkel hängt.',
 };
 
+const MS_FILL = ['shank', 'foot', 'thigh'];      // Reihenfolge beim Verbinden (Rolle steht erst nach dem Bewegen fest)
 function msStart() {
   const slots = {};
-  for (const k of Object.keys(MS_SLOTS)) {
-    // Ist der Standard-Sensor schon verbunden, wird er als Unterschenkel-Sensor übernommen.
+  for (const k of MS_FILL) {
+    // Ist der Standard-Sensor schon verbunden, wird er übernommen.
     const dev = (k === 'shank' && GonioBLE.connected) ? GonioBLE : GonioBLE.create();
     slots[k] = { dev, g:null, phi:0, flat:1, src:null, last:0, motion:0, connected: dev.connected, status: dev.connected ? (dev.deviceName || 'Verbunden') : '' };
-    dev.onAngles = a => msOnAngles(k, a);
-    dev.onLog = m => log(MS_SLOTS[k].label + ': ' + m);
-    dev.onStatus = (state, text) => { slots[k].connected = state === 'on'; slots[k].status = text; render(); };
   }
-  S.ms = { i:0, slots, kneeOff:0, val:{ ext:{}, flex:{} }, knee:null, osg:null };
+  S.ms = { i:0, slots, kneeOff:0, val:{ ext:{}, flex:{} }, knee:null, osg:null, ident:null, identified:{} };
+  for (const k of MS_FILL) bindSlot(k);
   msGo(0);
 }
+// Handler eines Sensors an seine aktuelle Rolle binden (nach Tausch neu aufrufen)
+function bindSlot(k) {
+  const s = S.ms.slots[k], dev = s.dev;
+  dev.onAngles = a => msOnAngles(k, a);
+  dev.onLog = m => log('Sensor ' + (dev.shortId ? dev.shortId() : '') + ': ' + m);
+  dev.onStatus = (state, text) => {
+    s.connected = state === 'on'; s.status = text;
+    if (state !== 'on') { S.ms.identified = {}; S.ms.ident = null; }   // Zuordnung neu nötig
+    render();
+  };
+}
+function msConnectedKeys() { return MS_FILL.filter(k => S.ms.slots[k].connected); }
+function msAdd() {                                 // nächsten freien Platz verbinden
+  const k = MS_FILL.find(k => !S.ms.slots[k].connected);
+  if (k) msConnect(k);
+}
+function msRemove(k) { const s = S.ms.slots[k]; S.ms.identified = {}; S.ms.ident = null; if (SIM) { s.connected = false; render(); } else s.dev.disconnect(); }
+
+// ── Zuordnen durch Bewegen ──
+function msIdentStart() {
+  const n = msConnectedKeys().length;
+  S.ms.identified = {};
+  S.ms.ident = { order: n >= 3 ? ['shank','foot','thigh'] : ['shank','foot'], idx: 0, armed: false };
+  render();
+}
+function msIdentCheck() {
+  const m = S.ms, id = m.ident;
+  if (!id || id.idx >= id.order.length) return;
+  const cand = msConnectedKeys().filter(k => !Object.values(m.identified).includes(m.slots[k].dev));
+  const mot = cand.map(k => m.slots[k].motion);
+  if (!id.armed) { if (Math.max(0, ...msConnectedKeys().map(k => m.slots[k].motion)) < 6) { id.armed = true; render(); } return; }  // erst Ruhe abwarten
+  const max = Math.max(...mot), iMax = mot.indexOf(max);
+  const second = Math.max(0, ...mot.filter((_, i) => i !== iMax));
+  if (max > 15 && max > 2.5 * second) {
+    const role = id.order[id.idx], from = cand[iMax];
+    if (from !== role) {                          // Sensor-Daten zwischen den Rollen tauschen
+      const t = m.slots[role]; m.slots[role] = m.slots[from]; m.slots[from] = t;
+      bindSlot(role); bindSlot(from);
+    }
+    m.identified[role] = m.slots[role].dev;
+    log(MS_SLOTS[role].label + ' = Sensor ' + (m.slots[role].dev.shortId ? m.slots[role].dev.shortId() : ''));
+    try { navigator.vibrate && navigator.vibrate(120); } catch(_) {}
+    id.idx++; id.armed = false;
+    render();
+  }
+}
+function msIdentDone() { const id = S.ms.ident; return !!id && id.idx >= id.order.length; }
 function msStop() {
   if (!S.ms) return;
   for (const s of Object.values(S.ms.slots)) {
@@ -302,7 +348,12 @@ function msGo(i) { S.ms.i = i; S.peak = null; S.peakKnee = null; S.hist = []; re
 
 async function msConnect(k) {
   const s = S.ms.slots[k];
-  if (SIM) { s.connected = true; s.status = 'Sim ' + MS_SLOTS[k].label; simMulti(); return render(); }
+  if (SIM) {
+    const used = MS_FILL.filter(o => S.ms.slots[o].connected).map(o => S.ms.slots[o].dev.simRole);
+    s.dev.simRole = (window.simOrder || ['foot','thigh','shank']).find(r => !used.includes(r));   // absichtlich „falsch“ verbunden
+    s.dev.deviceId = 'SIM-' + s.dev.simRole; s.dev.shortId = () => s.dev.simRole.slice(0,4).toUpperCase();
+    s.connected = true; s.status = 'Sim-Sensor'; simMulti(); return render();
+  }
   if (s.dev.connected) return s.dev.disconnect();
   if (s.busy) return;
   s.busy = true;
@@ -337,6 +388,7 @@ function msOnAngles(k, a) {
   s.phi = Math.atan2(s.g[1], s.g[0]) * 180/Math.PI;
   s.flat = Math.sqrt(Math.max(0, 1 - s.g[2]*s.g[2]));
   s.last = performance.now();
+  if (MS_PHASES[S.ms.i][1] === 'assign') { msIdentCheck(); if (k === MS_FILL.find(x => S.ms.slots[x].connected)) msTick(); return; }
   if (k === 'shank') msUpdate();      // einmal pro Unterschenkel-Paket rechnen
 }
 function msHas(k) { const s = S.ms.slots[k]; return s.connected && s.g && performance.now() - s.last < 1500; }
@@ -396,16 +448,33 @@ function renderMulti() {
       <div class="result" style="padding:10px"><div class="sub">OSG</div><div class="nn" style="font-size:34px" id="msOsg">–</div></div></div>`;
   let h = '';
   if (ph === 'assign') {
+    const keys = msConnectedKeys(), id = m.ident, done = msIdentDone();
+    const roleOf = k => Object.keys(m.identified).find(r => m.identified[r] === m.slots[k].dev);
+    const card = k => {
+      const s = m.slots[k], r = roleOf(k);
+      return `<div class="opt ${r ? 'active' : ''}" style="cursor:default">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>${r ? '✓ ' + MS_SLOTS[r].label : 'Sensor ' + (MS_FILL.indexOf(k) + 1)}</span>
+          <button class="chip" onclick="msRemove('${k}')">trennen</button></div>
+        <small>${s.status}${s.dev.deviceId ? ' · ID ' + s.dev.shortId() : ''}</small>
+        <div class="stab" style="margin-top:8px"><div id="mot_${k}"></div></div></div>`;
+    };
+    const prompt = id && !done ? `<div class="result" style="border-color:var(--orange)">
+        <div class="sub">Schritt ${id.idx + 1} von ${id.order.length}</div>
+        <div class="nn" style="font-size:26px;line-height:1.3">Sensor am<br>${MS_SLOTS[id.order[id.idx]].label.toUpperCase()}<br>kräftig bewegen</div>
+        <div class="sub">${id.armed ? 'Jetzt schütteln oder kippen …' : 'Erst alle Sensoren kurz ruhig halten …'}</div></div>` : '';
     h = `<div class="kicker">OSG + Knie · ${S.side}</div><h1>Sensoren zuordnen</h1>
-      <div class="hint">Je Feld antippen und einen Sensor wählen. Baugleiche Sensoren heißen gleich – sie unterscheiden sich an der <b>ID unter dem Namen</b>. Für das nächste Feld den <b>anderen Eintrag</b> wählen.<br>Prüfen: Sensor kurz bewegen – der Balken im richtigen Feld schlägt aus. Oberschenkel ist optional.</div>
-      <div class="rlist">${Object.keys(MS_SLOTS).map(k => {
-        const s = m.slots[k], c = MS_SLOTS[k];
-        return `<button class="opt ${s.connected ? 'active' : ''}" onclick="msConnect('${k}')">${c.label}${c.optional ? ' <small style="display:inline">(optional)</small>' : ''}
-          <small>${s.connected ? '✓ ' + s.status + (s.dev.deviceId ? ' · ID ' + s.dev.shortId() : '') : (s.status || 'antippen zum Verbinden')}</small>
-          <div class="stab" style="margin-top:8px"><div id="mot_${k}"></div></div></button>`; }).join('')}</div>
+      <div class="hint">${!keys.length ? '<b>1.</b> Alle Sensoren nacheinander verbinden – Reihenfolge egal.'
+        : !id ? '<b>2.</b> Wenn alle verbunden sind: <b>Zuordnen</b> tippen. Die App fragt dann nacheinander nach Unterschenkel, Fuß (und Oberschenkel) – du bewegst jeweils nur diesen einen Sensor.'
+        : done ? 'Fertig zugeordnet. Zum Prüfen einen Sensor bewegen – sein Balken schlägt aus.' : 'Nur den genannten Sensor bewegen, die anderen ruhig lassen.'}</div>
+      ${prompt}
+      <div class="rlist">${keys.map(card).join('')}</div>
+      ${keys.length < 3 && !id ? `<button class="btn ghost" onclick="msAdd()">+ Sensor verbinden (${keys.length}/3)</button>` : ''}
+      ${keys.length >= 2 && !id ? `<button class="btn" onclick="msIdentStart()">Zuordnen durch Bewegen</button>` : ''}
+      ${id ? `<button class="btn ghost" onclick="msIdentStart()">↺ Neu zuordnen</button>` : ''}
       <div style="flex:1"></div>
       <div class="row"><button class="btn ghost" onclick="${back}">← Zurück</button>
-      <button class="btn" ${m.slots.shank.connected && m.slots.foot.connected ? '' : 'disabled'} onclick="msGo(1)">Weiter →</button></div>`;
+      <button class="btn" ${done ? '' : 'disabled'} onclick="msGo(1)">Weiter →</button></div>`;
   } else if (ph === 'place') {
     h = `<div class="kicker">OSG + Knie · ${S.side}</div><h1>Sensoren anlegen</h1>
       <div class="hint">Alle Sensoren <b>flach seitlich (lateral)</b>, markierte Kante zeigt <b>nach distal</b>:<br>
@@ -483,9 +552,12 @@ function simMulti() {
     const n = () => (Math.random() - .5) * 0.01;
     const acc = phi => { const r = phi * Math.PI/180; return [Math.cos(r) + n(), Math.sin(r) + n(), n() * 3].map(x => x * 2048); };
     const pT = 20 + simTilt, pS = pT + kc, pF = pS + 90 + oc;
-    if (S.ms.slots.thigh.connected) msOnAngles('thigh', { X:0, Y:0, Z:0, acc: acc(pT) });
-    msOnAngles('foot', { X:0, Y:0, Z:0, acc: acc(pF) });
-    msOnAngles('shank', { X:0, Y:0, Z:0, acc: acc(pS) });
+    const shake = r => window.simShake === r ? (Math.random() - .5) * 60 : 0;
+    const P = { thigh: pT, shank: pS, foot: pF };
+    for (const k of ['thigh','foot','shank']) {        // Unterschenkel zuletzt (löst Berechnung aus)
+      const s = S.ms.slots[k]; if (!s.connected) continue;
+      const r = s.dev.simRole; msOnAngles(k, { X:0, Y:0, Z:0, acc: acc(P[r] + shake(r)) });
+    }
   }, 50);
 }
 
